@@ -1,0 +1,38 @@
+{
+  "name": "claude-squad",
+  "version": "0.1.0",
+  "description": "Terminal dashboard for monitoring Claude Code agent sessions",
+  "type": "module",
+  "bin": {
+    "claude-squad": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "claude",
+    "cli",
+    "terminal",
+    "dashboard",
+    "agent"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ink": "^5.1.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "@types/react": "^18.3.12",
+    "typescript": "^5.7.0"
+  }
+}
