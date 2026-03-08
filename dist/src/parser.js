@@ -175,16 +175,12 @@ export function processLine(session, line) {
                 session.lastActivityAt = Date.now();
                 changed = true;
             }
-            else if (blocks.some((b) => b.type === 'thinking')) {
-                session.activity = 'thinking';
-                session.statusText = 'Thinking...';
-                session.lastActivityAt = Date.now();
-                changed = true;
-            }
-            else if (blocks.some((b) => b.type === 'text') &&
-                !session.hadToolsInTurn) {
-                session.activity = 'active';
-                session.statusText = 'Responding...';
+            else {
+                // No tool_use in this message — the turn is over (model can't
+                // continue without tool results). Go straight to waiting.
+                session.activity = 'waiting';
+                session.statusText = 'Waiting for input';
+                session.hadToolsInTurn = false;
                 session.lastActivityAt = Date.now();
                 changed = true;
             }
@@ -269,17 +265,6 @@ export function processLine(session, line) {
                 session.lastActivityAt = Date.now();
                 changed = true;
             }
-        }
-        else if (record.type === 'system' &&
-            record.subtype === 'turn_duration') {
-            session.activity = 'waiting';
-            session.statusText = 'Waiting for input';
-            session.activeToolIds.clear();
-            session.activeToolNames.clear();
-            session.toolUseTimestamps.clear();
-            session.activeSubagents = 0;
-            session.hadToolsInTurn = false;
-            changed = true;
         }
         else if (record.type === 'last-prompt') {
             // Session ended cleanly
