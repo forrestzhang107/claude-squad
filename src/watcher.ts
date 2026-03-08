@@ -109,12 +109,17 @@ export function startWatching(
       }
     }
 
-    // If file hasn't changed and we're in an active state, check for idle
+    // If file hasn't changed and we're in a tool-related state, check for idle.
+    // Don't timeout 'active' or 'thinking' — the model is mid-response and the
+    // JSONL won't update until the full response is written. Only `turn_duration`
+    // should end those states.
     if (
       !changed &&
       session.activity !== 'waiting' &&
       session.activity !== 'stale' &&
       session.activity !== 'permission' &&
+      session.activity !== 'active' &&
+      session.activity !== 'thinking' &&
       session.activeToolIds.size === 0
     ) {
       try {
