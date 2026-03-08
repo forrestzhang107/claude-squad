@@ -43,6 +43,7 @@ export interface AgentSession {
   recentPaths: string[];
   contextTokens: number;
   contextMaxTokens: number;
+  lastResponseText: string;
 }
 
 export interface DiscoveredSession {

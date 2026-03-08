@@ -2,12 +2,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 const BASH_CMD_MAX = 40;
 const MAX_HISTORY = 4;
-const MIN_TASK_LENGTH = 20;
 const MAX_RECENT_PATHS = 20;
 // Strip emoji and other wide Unicode characters that break terminal column alignment
 const EMOJI_RE = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{2B50}\u{2B55}\u{231A}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25FE}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu;
 function stripEmoji(text) {
     return text.replace(EMOJI_RE, '');
+}
+// Strip system-injected XML tags (e.g. <system-reminder>, <local-command-caveat>) from user prompts
+function stripSystemTags(text) {
+    return text
+        .replace(/<[a-zA-Z_-]+>[\s\S]*?<\/[a-zA-Z_-]+>/g, '')
+        .replace(/<[a-zA-Z_-]+\/>/g, '')
+        .trim();
 }
 function findGitRoot(dir) {
     let current = dir;
@@ -102,9 +108,22 @@ function addHistory(session, tool, status) {
         session.toolHistory.shift();
     }
 }
+/** Extract joined text from an array of content blocks. */
+function extractText(blocks) {
+    return blocks
+        .filter((b) => b.type === 'text' && b.text)
+        .map((b) => b.text)
+        .join(' ')
+        .trim();
+}
+/** Clean user prompt text for display. */
+function cleanPrompt(text) {
+    return stripEmoji(stripSystemTags(text));
+}
 /** Clear all tool tracking state and reset turn-level flags. */
 function resetToolState(session) {
     session.respondedAt = 0;
+    session.lastResponseText = '';
     session.activeToolIds.clear();
     session.activeToolNames.clear();
     session.toolUseTimestamps.clear();
@@ -198,6 +217,12 @@ export function processLine(session, line) {
                 // Text block — could be mid-stream (tool_use may follow in next
                 // record) or the final response. Show as active; idle timeout
                 // uses respondedAt to detect when the turn is actually over.
+                // Capture last text-only response (no tool_use in this message).
+                // Mid-turn text before tool calls is intentionally skipped.
+                const textContent = extractText(blocks);
+                if (textContent) {
+                    session.lastResponseText = stripEmoji(textContent).replace(/\n+/g, ' ').slice(0, 500);
+                }
                 session.activity = 'active';
                 session.statusText = 'Responding...';
                 session.respondedAt = Date.now();
@@ -245,11 +270,7 @@ export function processLine(session, line) {
                 }
                 else {
                     // New user prompt (array form with text blocks)
-                    const text = content
-                        .filter((b) => b.type === 'text')
-                        .map((b) => b.text || '')
-                        .join(' ')
-                        .trim();
+                    const text = extractText(content);
                     // Ctrl+C interrupt — agent was stopped, not given new work
                     if (text.includes('[Request interrupted by user')) {
                         session.activity = 'waiting';
@@ -258,8 +279,8 @@ export function processLine(session, line) {
                         changed = true;
                     }
                     else {
-                        if (text.length >= MIN_TASK_LENGTH) {
-                            session.taskSummary = stripEmoji(text);
+                        if (text) {
+                            session.taskSummary = cleanPrompt(text);
                         }
                         session.activity = 'active';
                         session.statusText = 'Starting...';
@@ -269,9 +290,7 @@ export function processLine(session, line) {
                 }
             }
             else if (typeof content === 'string' && content.trim()) {
-                if (content.trim().length >= MIN_TASK_LENGTH) {
-                    session.taskSummary = stripEmoji(content.trim());
-                }
+                session.taskSummary = cleanPrompt(content.trim());
                 session.activity = 'active';
                 session.statusText = 'Starting...';
                 resetToolState(session);

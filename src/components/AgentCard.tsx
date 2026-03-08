@@ -53,6 +53,10 @@ export function AgentCard({session, width}: AgentCardProps) {
         <Text color={color}>{character.art}</Text>
       </Box>
 
+      <Box height={2} overflow="hidden" marginBottom={1}>
+        <Text dimColor wrap="wrap">{session.lastResponseText || ' '}</Text>
+      </Box>
+
       <Text color={color} wrap="truncate">{session.statusText}</Text>
 
       {session.currentFile ? (

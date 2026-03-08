@@ -33,6 +33,7 @@ export function createSession(discovered) {
         recentPaths: [],
         contextTokens: 0,
         contextMaxTokens: 200000,
+        lastResponseText: '',
     };
 }
 export function readNewLines(session) {
@@ -62,19 +63,8 @@ export function readNewLines(session) {
     }
     return changed;
 }
-export function skipToEnd(session) {
-    try {
-        const stat = fs.statSync(session.jsonlFile);
-        session.fileOffset = stat.size;
-    }
-    catch {
-        // ignore
-    }
-}
 export function startWatching(session, onChange) {
-    skipToEnd(session);
-    readFirstTimestamp(session);
-    readLastLines(session);
+    readFullFile(session);
     const interval = setInterval(() => {
         let changed = readNewLines(session);
         // If tools are active (direct or subagent) and we're not already showing
@@ -154,57 +144,16 @@ function canIdleTimeout(session) {
         return session.respondedAt > 0;
     return session.activity !== 'thinking' && session.activeToolIds.size === 0;
 }
-function readFirstTimestamp(session) {
+function readFullFile(session) {
     try {
-        // Read from the start of the file to find the earliest timestamp
-        const fd = fs.openSync(session.jsonlFile, 'r');
-        const buf = Buffer.alloc(8192);
-        const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
-        fs.closeSync(fd);
-        const text = buf.toString('utf-8', 0, bytesRead);
-        for (const line of text.split('\n')) {
-            if (!line.trim())
-                continue;
-            try {
-                const record = JSON.parse(line);
-                // Check top-level timestamp, then snapshot.timestamp as fallback
-                const ts = record.timestamp || record.snapshot?.timestamp;
-                if (ts) {
-                    const ms = new Date(ts).getTime();
-                    if (ms > 0) {
-                        session.sessionStartedAt = ms;
-                        return;
-                    }
-                }
-            }
-            catch {
-                // malformed line, try next
-            }
-        }
-    }
-    catch {
-        // ignore
-    }
-}
-function readLastLines(session) {
-    try {
-        const stat = fs.statSync(session.jsonlFile);
-        const readSize = Math.min(stat.size, 32768);
-        const buf = Buffer.alloc(readSize);
-        const fd = fs.openSync(session.jsonlFile, 'r');
-        fs.readSync(fd, buf, 0, readSize, stat.size - readSize);
-        fs.closeSync(fd);
-        const text = buf.toString('utf-8');
+        const text = fs.readFileSync(session.jsonlFile, 'utf-8');
         const lines = text.split('\n');
         for (const line of lines) {
             if (!line.trim())
                 continue;
             processLine(session, line);
         }
-        // If the session hasn't been active recently, mark appropriately.
-        // Don't override 'thinking' or 'active' without respondedAt (model may
-        // be mid-generation). 'active' with respondedAt can timeout (text was
-        // the last record, turn is likely over).
+        const stat = fs.statSync(session.jsonlFile);
         const age = Date.now() - stat.mtimeMs;
         if (age > STALE_ACTIVITY_MS) {
             session.activity = 'stale';
