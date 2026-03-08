@@ -8,7 +8,7 @@
 | `stale` | `(-_-)zzZ` | gray | Sleeping | JSONL file unmodified for 5+ minutes |
 | `active` | `(^_^)♪` | cyan | Working | Assistant text response (no tools in turn), or new user prompt |
 | `thinking` | `(o.o)...` | cyan | Thinking | Assistant `thinking` block |
-| `reading` | `(o_o) ` | blueBright | Reading | `Read` tool use |
+| `reading` | `(o_o) ` | cyan | Reading | `Read` tool use |
 | `editing` | `(*_*)~` | yellow | Editing | `Edit` or `Write` tool use |
 | `running` | `(^_^)/` | green | Running | `Bash`, `Agent`, or `Task` tool use |
 | `searching` | `(o_o)?` | magenta | Searching | `Glob`, `Grep`, `WebFetch`, `WebSearch` tool use |

@@ -16,10 +16,23 @@ export function Dashboard({ projectFilter, showAll }) {
         }
     });
     useEffect(() => {
-        const cleanups = [];
         const tracked = new Map();
+        const cleanupFns = new Map();
         function scan() {
             const discovered = scanSessions({ showAll, projectFilter });
+            const discoveredKeys = new Set(discovered.map((d) => d.jsonlFile));
+            // Remove sessions that are no longer discovered
+            for (const key of tracked.keys()) {
+                if (!discoveredKeys.has(key)) {
+                    tracked.delete(key);
+                    const cleanup = cleanupFns.get(key);
+                    if (cleanup) {
+                        cleanup();
+                        cleanupFns.delete(key);
+                    }
+                }
+            }
+            // Add newly discovered sessions
             for (const d of discovered) {
                 if (tracked.has(d.jsonlFile))
                     continue;
@@ -28,7 +41,7 @@ export function Dashboard({ projectFilter, showAll }) {
                 const cleanup = startWatching(session, () => {
                     setTick((t) => t + 1);
                 });
-                cleanups.push(cleanup);
+                cleanupFns.set(d.jsonlFile, cleanup);
             }
             setSessions(Array.from(tracked.values()));
         }
@@ -36,7 +49,7 @@ export function Dashboard({ projectFilter, showAll }) {
         const interval = setInterval(scan, RESCAN_INTERVAL_MS);
         return () => {
             clearInterval(interval);
-            for (const cleanup of cleanups)
+            for (const cleanup of cleanupFns.values())
                 cleanup();
         };
     }, [projectFilter, showAll]);

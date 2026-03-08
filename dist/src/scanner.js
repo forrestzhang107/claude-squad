@@ -13,13 +13,13 @@ function getActiveClaudeDirs() {
         }).trim().split('\n').filter(Boolean);
         for (const pid of pids) {
             try {
-                const output = execSync(`lsof -p ${pid} -Fn 2>/dev/null | grep '/Repos/' | head -1`, {
+                const output = execSync(`lsof -p ${pid} -d cwd -Fn 2>/dev/null | grep '^n'`, {
                     encoding: 'utf-8',
                     stdio: ['pipe', 'pipe', 'pipe'],
                 }).trim();
                 if (output) {
-                    const filePath = output.startsWith('n') ? output.slice(1) : output;
-                    counts.set(filePath, (counts.get(filePath) || 0) + 1);
+                    const cwd = output.startsWith('n') ? output.slice(1) : output;
+                    counts.set(cwd, (counts.get(cwd) || 0) + 1);
                 }
             }
             catch {
