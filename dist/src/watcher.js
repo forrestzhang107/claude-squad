@@ -12,7 +12,7 @@ export function createSession(discovered) {
         jsonlFile: discovered.jsonlFile,
         gitBranch: '',
         activity: 'waiting',
-        statusText: 'Watching...',
+        statusText: 'Waiting for input',
         lastActivityAt: discovered.modifiedAt,
         sessionStartedAt: 0,
         currentFile: '',

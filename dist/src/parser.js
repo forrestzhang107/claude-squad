@@ -120,6 +120,18 @@ function extractText(blocks) {
 function cleanPrompt(text) {
     return stripEmoji(stripSystemTags(text));
 }
+/** Apply state changes when a new user prompt starts a fresh task. Returns true if applied. */
+function applyNewPrompt(session, rawText) {
+    const cleaned = cleanPrompt(rawText);
+    if (!cleaned)
+        return false;
+    session.taskSummary = cleaned;
+    session.lastResponseText = '';
+    session.activity = 'active';
+    session.statusText = 'Starting...';
+    resetToolState(session);
+    return true;
+}
 /** Clear all tool tracking state and reset turn-level flags. */
 function resetToolState(session) {
     session.respondedAt = 0;
@@ -164,7 +176,7 @@ export function processLine(session, line) {
             // Capture assistant text from any message (even those with tool_use)
             const textContent = extractText(blocks);
             if (textContent) {
-                session.lastResponseText = stripEmoji(textContent).replace(/\n+/g, ' ').slice(0, 500);
+                session.lastResponseText = stripEmoji(textContent).replace(/\s+/g, ' ').slice(0, 500);
             }
             const toolUses = blocks.filter((b) => b.type === 'tool_use');
             if (toolUses.length > 0) {
@@ -274,25 +286,16 @@ export function processLine(session, line) {
                         resetToolState(session);
                         changed = true;
                     }
-                    else {
-                        if (text) {
-                            session.taskSummary = cleanPrompt(text);
-                        }
-                        session.lastResponseText = '';
-                        session.activity = 'active';
-                        session.statusText = 'Starting...';
-                        resetToolState(session);
+                    else if (applyNewPrompt(session, text)) {
+                        // applyNewPrompt returns false for empty prompts (e.g. /clear) — ignore those
                         changed = true;
                     }
                 }
             }
             else if (typeof content === 'string' && content.trim()) {
-                session.taskSummary = cleanPrompt(content.trim());
-                session.lastResponseText = '';
-                session.activity = 'active';
-                session.statusText = 'Starting...';
-                resetToolState(session);
-                changed = true;
+                if (applyNewPrompt(session, content.trim())) {
+                    changed = true;
+                }
             }
         }
         else if (record.type === 'system' &&
