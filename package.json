@@ -1,10 +1,10 @@
 {
-  "name": "claude-squad",
+  "name": "claude-hq",
   "version": "0.1.0",
   "description": "Terminal dashboard for monitoring Claude Code agent sessions",
   "type": "module",
   "bin": {
-    "claude-squad": "./dist/bin/cli.js"
+    "claude-hq": "./dist/bin/cli.js"
   },
   "scripts": {
     "build": "tsc",

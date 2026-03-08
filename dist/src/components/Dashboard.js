@@ -41,8 +41,8 @@ export function Dashboard({ projectFilter, showAll }) {
         };
     }, [projectFilter, showAll]);
     if (sessions.length === 0) {
-        return (_jsxs(Box, { flexDirection: "column", padding: 1, children: [_jsx(Text, { bold: true, color: "cyan", children: "claude-squad" }), _jsx(Text, { dimColor: true, children: "No active Claude sessions found." }), _jsx(Text, { dimColor: true, children: "Start a Claude Code session and it will appear here." })] }));
+        return (_jsxs(Box, { flexDirection: "column", padding: 1, children: [_jsx(Text, { bold: true, color: "cyan", children: "claude-hq" }), _jsx(Text, { dimColor: true, children: "No active Claude sessions found." }), _jsx(Text, { dimColor: true, children: "Start a Claude Code session and it will appear here." })] }));
     }
-    return (_jsxs(Box, { flexDirection: "column", padding: 1, children: [_jsxs(Box, { marginBottom: 1, children: [_jsx(Text, { bold: true, color: "cyan", children: "claude-squad " }), _jsxs(Text, { dimColor: true, children: [sessions.length, " session", sessions.length !== 1 ? 's' : '', " | q to quit"] })] }), _jsx(Box, { flexDirection: "row", flexWrap: "wrap", gap: 1, children: sessions.map((session) => (_jsx(AgentCard, { session: session, width: CARD_WIDTH }, session.jsonlFile))) })] }));
+    return (_jsxs(Box, { flexDirection: "column", padding: 1, children: [_jsxs(Box, { marginBottom: 1, children: [_jsx(Text, { bold: true, color: "cyan", children: "claude-hq " }), _jsxs(Text, { dimColor: true, children: [sessions.length, " session", sessions.length !== 1 ? 's' : '', " | q to quit"] })] }), _jsx(Box, { flexDirection: "row", flexWrap: "wrap", gap: 1, children: sessions.map((session) => (_jsx(AgentCard, { session: session, width: CARD_WIDTH }, session.jsonlFile))) })] }));
 }
 //# sourceMappingURL=Dashboard.js.map

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-claude-squad is a terminal dashboard (TUI) that monitors Claude Code agent sessions in real-time by watching JSONL transcript files. Built with Ink (React for the terminal).
+claude-hq is a terminal dashboard (TUI) that monitors Claude Code agent sessions in real-time by watching JSONL transcript files. Built with Ink (React for the terminal).
 
 ## Commands
 

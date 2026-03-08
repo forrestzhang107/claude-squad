@@ -58,7 +58,7 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
   if (sessions.length === 0) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text bold color="cyan">claude-squad</Text>
+        <Text bold color="cyan">claude-hq</Text>
         <Text dimColor>No active Claude sessions found.</Text>
         <Text dimColor>Start a Claude Code session and it will appear here.</Text>
       </Box>
@@ -68,7 +68,7 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
   return (
     <Box flexDirection="column" padding={1}>
       <Box marginBottom={1}>
-        <Text bold color="cyan">claude-squad </Text>
+        <Text bold color="cyan">claude-hq </Text>
         <Text dimColor>
           {sessions.length} session{sessions.length !== 1 ? 's' : ''} | q to
           quit
