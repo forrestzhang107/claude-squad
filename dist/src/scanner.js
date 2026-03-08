@@ -4,6 +4,15 @@ import * as os from 'node:os';
 import { execSync } from 'node:child_process';
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+/** Encode a filesystem path the same way Claude does for project directory names. */
+function pathToDirName(fsPath) {
+    return fsPath.replace(/[^a-zA-Z0-9-]/g, '-');
+}
+/**
+ * Returns a map of encoded project-dir-name -> number of active claude processes.
+ * Uses the same encoding Claude uses (replace non-alphanumeric with '-') so we can
+ * match directly against the directory names under ~/.claude/projects/.
+ */
 function getActiveClaudeDirs() {
     const counts = new Map();
     try {
@@ -19,7 +28,8 @@ function getActiveClaudeDirs() {
                 }).trim();
                 if (output) {
                     const cwd = output.startsWith('n') ? output.slice(1) : output;
-                    counts.set(cwd, (counts.get(cwd) || 0) + 1);
+                    const dirName = pathToDirName(cwd);
+                    counts.set(dirName, (counts.get(dirName) || 0) + 1);
                 }
             }
             catch {
@@ -31,32 +41,6 @@ function getActiveClaudeDirs() {
         // No claude processes
     }
     return counts;
-}
-function dirNameToPath(dirName) {
-    // Reconstruct the actual filesystem path from the dir name
-    const home = os.homedir();
-    const homePrefix = home.replace(/[^a-zA-Z0-9-]/g, '-');
-    if (!dirName.startsWith(homePrefix))
-        return '';
-    const rest = dirName.slice(homePrefix.length + 1);
-    const segments = rest.split('-');
-    let resolved = home;
-    let buffer = '';
-    for (const seg of segments) {
-        buffer = buffer ? buffer + '-' + seg : seg;
-        const candidate = path.join(resolved, buffer);
-        try {
-            if (fs.statSync(candidate).isDirectory()) {
-                resolved = candidate;
-                buffer = '';
-            }
-        }
-        catch {
-            // doesn't exist, keep buffering
-        }
-    }
-    // If buffer is non-empty, the remaining segments form the last path component
-    return buffer ? path.join(resolved, buffer) : resolved;
 }
 export function extractProjectName(dirName) {
     // The dir name is the full path with non-alphanumeric chars replaced by '-'
@@ -139,47 +123,42 @@ export function scanSessions(options) {
                 projectName,
                 jsonlFile: filePath,
                 modifiedAt: fileStat.mtimeMs,
+                createdAt: fileStat.birthtimeMs,
             });
         }
     }
+    // Sort by modifiedAt descending so we always prefer the most recently written files
     sessions.sort((a, b) => b.modifiedAt - a.modifiedAt);
     if (showAll) {
-        // Show all, deduplicated to one per project
+        // Show all, deduplicated to one per project (most recently modified wins)
         const seen = new Set();
-        return sessions.filter((s) => {
+        const all = sessions.filter((s) => {
             if (seen.has(s.projectDir))
                 return false;
             seen.add(s.projectDir);
             return true;
         });
+        all.sort((a, b) => a.createdAt - b.createdAt);
+        return all;
     }
-    // Build a map of active directory -> number of claude processes
+    // Get active claude process directories (encoded as project-dir-names)
     const activeDirCounts = getActiveClaudeDirs();
-    if (activeDirCounts.size === 0) {
-        // Fallback: no process info, show most recent per project
-        const seen = new Set();
-        return sessions.filter((s) => {
-            if (seen.has(s.projectDir))
-                return false;
-            seen.add(s.projectDir);
-            return true;
-        });
-    }
-    // For each active dir, keep N most recent sessions (where N = process count)
-    // Map session projectDir -> resolved filesystem path
+    // For each active dir, keep N most recently modified sessions (N = process count).
+    // Matching is done on the encoded dir name directly — no lossy path reconstruction.
     const result = [];
-    const allowance = new Map(); // resolved path -> remaining slots
-    for (const [dir, count] of activeDirCounts) {
-        allowance.set(dir, count);
+    const allowance = new Map();
+    for (const [dirName, count] of activeDirCounts) {
+        allowance.set(dirName, count);
     }
+    // sessions are sorted by modifiedAt desc, so first N per dir are the active ones
     for (const s of sessions) {
-        const sessionPath = dirNameToPath(s.projectDir);
-        const remaining = allowance.get(sessionPath);
+        const remaining = allowance.get(s.projectDir);
         if (remaining !== undefined && remaining > 0) {
             result.push(s);
-            allowance.set(sessionPath, remaining - 1);
+            allowance.set(s.projectDir, remaining - 1);
         }
     }
+    result.sort((a, b) => a.createdAt - b.createdAt);
     return result;
 }
 //# sourceMappingURL=scanner.js.map

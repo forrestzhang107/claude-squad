@@ -34,4 +34,5 @@ export interface DiscoveredSession {
     projectName: string;
     jsonlFile: string;
     modifiedAt: number;
+    createdAt: number;
 }
