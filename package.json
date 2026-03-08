@@ -10,10 +10,14 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/bin/cli.js",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "bin",
+    "tsconfig.json"
   ],
   "keywords": [
     "claude",

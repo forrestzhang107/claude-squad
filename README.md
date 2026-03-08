@@ -26,7 +26,7 @@ claude-squad 4 sessions | q to quit
 ## Install
 
 ```bash
-npm install -g claude-squad
+npm install -g github:forrestzhang107/claude-squad
 ```
 
 ## Usage
