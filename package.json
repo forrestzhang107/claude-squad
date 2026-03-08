@@ -7,7 +7,7 @@
     "claude-squad": "./dist/bin/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npx tsc",
     "dev": "tsc --watch",
     "start": "node dist/bin/cli.js",
     "prepare": "npm run build",
