@@ -49,7 +49,7 @@ export function getActivityColor(activity) {
         case 'thinking':
             return 'cyan';
         case 'reading':
-            return 'blueBright';
+            return 'cyan';
         case 'editing':
             return 'yellow';
         case 'running':

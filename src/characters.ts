@@ -58,7 +58,7 @@ export function getActivityColor(activity: AgentActivity): string {
     case 'thinking':
       return 'cyan';
     case 'reading':
-      return 'blueBright';
+      return 'cyan';
     case 'editing':
       return 'yellow';
     case 'running':
