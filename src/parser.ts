@@ -139,7 +139,6 @@ function cleanPrompt(text: string): string {
 /** Clear all tool tracking state and reset turn-level flags. */
 function resetToolState(session: AgentSession): void {
   session.respondedAt = 0;
-  session.lastResponseText = '';
   session.activeToolIds.clear();
   session.activeToolNames.clear();
   session.toolUseTimestamps.clear();
@@ -191,6 +190,12 @@ export function processLine(session: AgentSession, line: string): boolean {
         text?: string;
         input?: Record<string, unknown>;
       }>;
+
+      // Capture assistant text from any message (even those with tool_use)
+      const textContent = extractText(blocks);
+      if (textContent) {
+        session.lastResponseText = stripEmoji(textContent).replace(/\n+/g, ' ').slice(0, 500);
+      }
 
       const toolUses = blocks.filter((b) => b.type === 'tool_use');
 
@@ -253,15 +258,7 @@ export function processLine(session: AgentSession, line: string): boolean {
         session.lastActivityAt = Date.now();
         changed = true;
       } else if (blocks.some((b) => b.type === 'text')) {
-        // Text block — could be mid-stream (tool_use may follow in next
-        // record) or the final response. Show as active; idle timeout
-        // uses respondedAt to detect when the turn is actually over.
-        // Capture last text-only response (no tool_use in this message).
-        // Mid-turn text before tool calls is intentionally skipped.
-        const textContent = extractText(blocks);
-        if (textContent) {
-          session.lastResponseText = stripEmoji(textContent).replace(/\n+/g, ' ').slice(0, 500);
-        }
+        // Text block with no tools — could be mid-stream or final response.
         session.activity = 'active';
         session.statusText = 'Responding...';
         session.respondedAt = Date.now();
@@ -320,6 +317,7 @@ export function processLine(session: AgentSession, line: string): boolean {
             if (text) {
               session.taskSummary = cleanPrompt(text);
             }
+            session.lastResponseText = '';
             session.activity = 'active';
             session.statusText = 'Starting...';
             resetToolState(session);
@@ -328,6 +326,7 @@ export function processLine(session: AgentSession, line: string): boolean {
         }
       } else if (typeof content === 'string' && content.trim()) {
         session.taskSummary = cleanPrompt(content.trim());
+        session.lastResponseText = '';
         session.activity = 'active';
         session.statusText = 'Starting...';
         resetToolState(session);
