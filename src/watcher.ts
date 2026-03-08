@@ -3,6 +3,8 @@ import type {AgentSession, DiscoveredSession} from './types.js';
 import {processLine} from './parser.js';
 
 const POLL_INTERVAL_MS = 1000;
+const PERMISSION_TIMEOUT_MS = 7000;
+const IDLE_TIMEOUT_MS = 10000; // 10s with no file changes → waiting
 
 export function createSession(discovered: DiscoveredSession): AgentSession {
   return {
@@ -11,14 +13,20 @@ export function createSession(discovered: DiscoveredSession): AgentSession {
     projectName: discovered.projectName,
     jsonlFile: discovered.jsonlFile,
     gitBranch: '',
-    activity: 'idle',
+    activity: 'waiting',
     statusText: 'Watching...',
     lastActivityAt: discovered.modifiedAt,
+    sessionStartedAt: 0,
+    currentFile: '',
+    toolHistory: [],
+    activeSubagents: 0,
     fileOffset: 0,
     lineBuffer: '',
     activeToolIds: new Set(),
     activeToolNames: new Map(),
+    toolUseTimestamps: new Map(),
     hadToolsInTurn: false,
+    taskSummary: '',
   };
 }
 
@@ -67,7 +75,49 @@ export function startWatching(
   readLastLines(session);
 
   const interval = setInterval(() => {
-    if (readNewLines(session)) {
+    let changed = readNewLines(session);
+
+    // If tools are active and we're not already showing permission state,
+    // check if any tool has been waiting long enough to suggest permission prompt
+    if (
+      session.activeToolIds.size > 0 &&
+      session.activity !== 'permission' &&
+      session.activity !== 'waiting' &&
+      session.activity !== 'stale'
+    ) {
+      const now = Date.now();
+      for (const [, timestamp] of session.toolUseTimestamps) {
+        if (now - timestamp >= PERMISSION_TIMEOUT_MS) {
+          session.activity = 'permission';
+          session.statusText = 'Requesting permission';
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    // If file hasn't changed and we're in an active state, check for idle
+    if (
+      !changed &&
+      session.activity !== 'waiting' &&
+      session.activity !== 'stale' &&
+      session.activity !== 'permission' &&
+      session.activeToolIds.size === 0
+    ) {
+      try {
+        const stat = fs.statSync(session.jsonlFile);
+        if (Date.now() - stat.mtimeMs > IDLE_TIMEOUT_MS) {
+          session.activity = 'waiting';
+          session.statusText = 'Waiting for input';
+          session.hadToolsInTurn = false;
+          changed = true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (changed) {
       onChange();
     }
   }, POLL_INTERVAL_MS);
@@ -75,10 +125,12 @@ export function startWatching(
   return () => clearInterval(interval);
 }
 
+const STALE_ACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
+
 function readLastLines(session: AgentSession): void {
   try {
     const stat = fs.statSync(session.jsonlFile);
-    const readSize = Math.min(stat.size, 8192);
+    const readSize = Math.min(stat.size, 32768);
     const buf = Buffer.alloc(readSize);
     const fd = fs.openSync(session.jsonlFile, 'r');
     fs.readSync(fd, buf, 0, readSize, stat.size - readSize);
@@ -90,6 +142,12 @@ function readLastLines(session: AgentSession): void {
     for (const line of lines) {
       if (!line.trim()) continue;
       processLine(session, line);
+    }
+
+    // If the session hasn't been active recently, it's idle
+    if (Date.now() - stat.mtimeMs > STALE_ACTIVITY_MS && session.activity !== 'stale') {
+      session.activity = 'stale';
+      session.statusText = 'Inactive';
     }
 
     session.fileOffset = stat.size;

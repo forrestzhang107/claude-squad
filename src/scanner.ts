@@ -1,20 +1,100 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import {execSync} from 'node:child_process';
 import type {DiscoveredSession} from './types.js';
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-export function extractProjectName(dirName: string): string {
-  const parts = dirName.split('-').filter(Boolean);
-  const reposIdx = parts.findIndex(
-    (p) => p.toLowerCase() === 'repos',
-  );
-  if (reposIdx >= 0 && reposIdx < parts.length - 1) {
-    return parts.slice(reposIdx + 1).join('-');
+function getActiveClaudeDirs(): Map<string, number> {
+  const counts = new Map<string, number>();
+  try {
+    const pids = execSync("ps -eo pid,comm | grep -w 'claude$' | awk '{print $1}'", {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim().split('\n').filter(Boolean);
+
+    for (const pid of pids) {
+      try {
+        const output = execSync(`lsof -p ${pid} -Fn 2>/dev/null | grep '/Repos/' | head -1`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        if (output) {
+          const filePath = output.startsWith('n') ? output.slice(1) : output;
+          counts.set(filePath, (counts.get(filePath) || 0) + 1);
+        }
+      } catch {
+        // Process may have exited
+      }
+    }
+  } catch {
+    // No claude processes
   }
-  return parts.slice(-1)[0] || dirName;
+  return counts;
+}
+
+function dirNameToPath(dirName: string): string {
+  // Reconstruct the actual filesystem path from the dir name
+  const home = os.homedir();
+  const homePrefix = home.replace(/[^a-zA-Z0-9-]/g, '-');
+
+  if (!dirName.startsWith(homePrefix)) return '';
+
+  const rest = dirName.slice(homePrefix.length + 1);
+  const segments = rest.split('-');
+  let resolved = home;
+  let buffer = '';
+
+  for (const seg of segments) {
+    buffer = buffer ? buffer + '-' + seg : seg;
+    const candidate = path.join(resolved, buffer);
+    try {
+      if (fs.statSync(candidate).isDirectory()) {
+        resolved = candidate;
+        buffer = '';
+      }
+    } catch {
+      // doesn't exist, keep buffering
+    }
+  }
+
+  // If buffer is non-empty, the remaining segments form the last path component
+  return buffer ? path.join(resolved, buffer) : resolved;
+}
+
+export function extractProjectName(dirName: string): string {
+  // The dir name is the full path with non-alphanumeric chars replaced by '-'
+  // e.g. "/Users/forrest/Repos/telvana/telvana-api" -> "-Users-forrest-Repos-telvana-telvana-api"
+  // We resolve against the actual filesystem to find the real last path segment.
+  const home = os.homedir();
+  const homePrefix = home.replace(/[^a-zA-Z0-9-]/g, '-');
+
+  if (!dirName.startsWith(homePrefix)) {
+    const parts = dirName.split('-').filter(Boolean);
+    return parts[parts.length - 1] || dirName;
+  }
+
+  const rest = dirName.slice(homePrefix.length + 1); // e.g. "Repos-telvana-telvana-api"
+  const segments = rest.split('-');
+  let resolved = home;
+  let buffer = '';
+
+  for (const seg of segments) {
+    buffer = buffer ? buffer + '-' + seg : seg;
+    const candidate = path.join(resolved, buffer);
+    try {
+      if (fs.statSync(candidate).isDirectory()) {
+        resolved = candidate;
+        buffer = '';
+      }
+    } catch {
+      // doesn't exist, keep buffering
+    }
+  }
+
+  return buffer || path.basename(resolved);
 }
 
 export function scanSessions(options: {
@@ -82,10 +162,46 @@ export function scanSessions(options: {
 
   sessions.sort((a, b) => b.modifiedAt - a.modifiedAt);
 
-  const seen = new Set<string>();
-  return sessions.filter((s) => {
-    if (seen.has(s.projectDir)) return false;
-    seen.add(s.projectDir);
-    return true;
-  });
+  if (showAll) {
+    // Show all, deduplicated to one per project
+    const seen = new Set<string>();
+    return sessions.filter((s) => {
+      if (seen.has(s.projectDir)) return false;
+      seen.add(s.projectDir);
+      return true;
+    });
+  }
+
+  // Build a map of active directory -> number of claude processes
+  const activeDirCounts = getActiveClaudeDirs();
+
+  if (activeDirCounts.size === 0) {
+    // Fallback: no process info, show most recent per project
+    const seen = new Set<string>();
+    return sessions.filter((s) => {
+      if (seen.has(s.projectDir)) return false;
+      seen.add(s.projectDir);
+      return true;
+    });
+  }
+
+  // For each active dir, keep N most recent sessions (where N = process count)
+  // Map session projectDir -> resolved filesystem path
+  const result: DiscoveredSession[] = [];
+  const allowance = new Map<string, number>(); // resolved path -> remaining slots
+
+  for (const [dir, count] of activeDirCounts) {
+    allowance.set(dir, count);
+  }
+
+  for (const s of sessions) {
+    const sessionPath = dirNameToPath(s.projectDir);
+    const remaining = allowance.get(sessionPath);
+    if (remaining !== undefined && remaining > 0) {
+      result.push(s);
+      allowance.set(sessionPath, remaining - 1);
+    }
+  }
+
+  return result;
 }

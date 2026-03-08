@@ -11,7 +11,7 @@ interface DashboardProps {
 }
 
 const RESCAN_INTERVAL_MS = 5000;
-const CARD_WIDTH = 30;
+const CARD_WIDTH = 40;
 
 export function Dashboard({projectFilter, showAll}: DashboardProps) {
   const {exit} = useApp();

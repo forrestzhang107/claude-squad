@@ -6,7 +6,11 @@ interface CharacterFrame {
 }
 
 const characters: Record<AgentActivity, CharacterFrame> = {
-  idle: {
+  waiting: {
+    art: '(._.)...',
+    label: 'Waiting',
+  },
+  stale: {
     art: '(-_-)zzZ',
     label: 'Sleeping',
   },
@@ -27,7 +31,7 @@ const characters: Record<AgentActivity, CharacterFrame> = {
     label: 'Editing',
   },
   running: {
-    art: '(>_<)>',
+    art: '(^_^)/',
     label: 'Running',
   },
   searching: {
@@ -46,13 +50,15 @@ export function getCharacter(activity: AgentActivity): CharacterFrame {
 
 export function getActivityColor(activity: AgentActivity): string {
   switch (activity) {
-    case 'idle':
+    case 'waiting':
+      return 'white';
+    case 'stale':
       return 'gray';
     case 'active':
     case 'thinking':
       return 'cyan';
     case 'reading':
-      return 'blue';
+      return 'blueBright';
     case 'editing':
       return 'yellow';
     case 'running':

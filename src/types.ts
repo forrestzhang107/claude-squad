@@ -1,5 +1,6 @@
 export type AgentActivity =
-  | 'idle'
+  | 'waiting'
+  | 'stale'
   | 'active'
   | 'reading'
   | 'editing'
@@ -7,6 +8,12 @@ export type AgentActivity =
   | 'searching'
   | 'permission'
   | 'thinking';
+
+export interface ToolHistoryEntry {
+  tool: string;
+  status: string;
+  timestamp: number;
+}
 
 export interface AgentSession {
   sessionId: string;
@@ -17,11 +24,17 @@ export interface AgentSession {
   activity: AgentActivity;
   statusText: string;
   lastActivityAt: number;
+  sessionStartedAt: number;
+  currentFile: string;
+  toolHistory: ToolHistoryEntry[];
+  activeSubagents: number;
   fileOffset: number;
   lineBuffer: string;
   activeToolIds: Set<string>;
   activeToolNames: Map<string, string>;
+  toolUseTimestamps: Map<string, number>;
   hadToolsInTurn: boolean;
+  taskSummary: string;
 }
 
 export interface DiscoveredSession {

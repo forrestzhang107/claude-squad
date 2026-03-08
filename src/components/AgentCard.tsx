@@ -8,9 +8,23 @@ interface AgentCardProps {
   width: number;
 }
 
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMin = minutes % 60;
+  return `${hours}h${remainingMin > 0 ? `${remainingMin}m` : ''}`;
+}
+
 export function AgentCard({session, width}: AgentCardProps) {
   const character = getCharacter(session.activity);
   const color = getActivityColor(session.activity);
+  const now = Date.now();
+  const duration = session.sessionStartedAt
+    ? formatDuration(now - session.sessionStartedAt)
+    : '';
 
   return (
     <Box
@@ -20,20 +34,48 @@ export function AgentCard({session, width}: AgentCardProps) {
       borderColor={color}
       paddingX={1}
     >
-      <Box justifyContent="space-between">
-        <Text bold>{session.projectName}</Text>
+      <Text bold wrap="truncate">
+        {session.projectName}
         {session.gitBranch ? (
-          <Text dimColor>({session.gitBranch})</Text>
+          <Text dimColor> ({session.gitBranch})</Text>
         ) : null}
-      </Box>
+      </Text>
+
+      {session.taskSummary ? (
+        <Text dimColor italic wrap="truncate-end">{session.taskSummary}</Text>
+      ) : null}
 
       <Box justifyContent="center" marginY={1}>
         <Text color={color}>{character.art}</Text>
       </Box>
 
-      <Text wrap="truncate">
-        <Text color={color}>{session.statusText}</Text>
-      </Text>
+      <Text color={color} wrap="truncate">{session.statusText}</Text>
+
+      {session.currentFile ? (
+        <Text dimColor wrap="truncate">File: {session.currentFile}</Text>
+      ) : null}
+
+      {session.activeSubagents > 0 ? (
+        <Text color="magenta">
+          Subagents: {session.activeSubagents}
+        </Text>
+      ) : null}
+
+      {duration ? (
+        <Text dimColor>Session: {duration}</Text>
+      ) : null}
+
+      {session.toolHistory.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>Recent:</Text>
+          {session.toolHistory.map((entry, i) => (
+            <Text key={i} dimColor wrap="truncate">
+              {i === session.toolHistory.length - 1 ? ' > ' : '   '}
+              {entry.status}
+            </Text>
+          ))}
+        </Box>
+      ) : null}
     </Box>
   );
 }
