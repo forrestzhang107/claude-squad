@@ -134,6 +134,7 @@ export function processLine(session, line) {
             const toolUses = blocks.filter((b) => b.type === 'tool_use');
             if (toolUses.length > 0) {
                 session.hadToolsInTurn = true;
+                session.respondedAt = 0; // text was mid-stream, not end of turn
                 for (const tool of toolUses) {
                     const toolName = tool.name || '';
                     const { activity, statusText, file } = formatToolStatus(toolName, tool.input || {});
@@ -175,12 +176,19 @@ export function processLine(session, line) {
                 session.lastActivityAt = Date.now();
                 changed = true;
             }
-            else {
-                // No tool_use in this message — the turn is over (model can't
-                // continue without tool results). Go straight to waiting.
-                session.activity = 'waiting';
-                session.statusText = 'Waiting for input';
-                session.hadToolsInTurn = false;
+            else if (blocks.some((b) => b.type === 'thinking')) {
+                session.activity = 'thinking';
+                session.statusText = 'Thinking...';
+                session.lastActivityAt = Date.now();
+                changed = true;
+            }
+            else if (blocks.some((b) => b.type === 'text')) {
+                // Text block — could be mid-stream (tool_use may follow in next
+                // record) or the final response. Show as active; idle timeout
+                // uses respondedAt to detect when the turn is actually over.
+                session.activity = 'active';
+                session.statusText = 'Responding...';
+                session.respondedAt = Date.now();
                 session.lastActivityAt = Date.now();
                 changed = true;
             }
@@ -196,6 +204,11 @@ export function processLine(session, line) {
                             const toolName = session.activeToolNames.get(block.tool_use_id);
                             if (toolName === 'Agent' || toolName === 'Task') {
                                 session.activeSubagents = Math.max(0, session.activeSubagents - 1);
+                                // Clean up any tracked subagent tools
+                                if (session.activeSubagents === 0) {
+                                    session.pendingSubagentToolIds.clear();
+                                    session.subagentToolTimestamps.clear();
+                                }
                             }
                             session.activeToolIds.delete(block.tool_use_id);
                             session.activeToolNames.delete(block.tool_use_id);
@@ -241,6 +254,7 @@ export function processLine(session, line) {
                         }
                         session.activity = 'active';
                         session.statusText = 'Starting...';
+                        session.respondedAt = 0;
                         session.activeToolIds.clear();
                         session.activeToolNames.clear();
                         session.toolUseTimestamps.clear();
@@ -257,6 +271,7 @@ export function processLine(session, line) {
                 }
                 session.activity = 'active';
                 session.statusText = 'Starting...';
+                session.respondedAt = 0;
                 session.activeToolIds.clear();
                 session.activeToolNames.clear();
                 session.toolUseTimestamps.clear();
@@ -265,6 +280,19 @@ export function processLine(session, line) {
                 session.lastActivityAt = Date.now();
                 changed = true;
             }
+        }
+        else if (record.type === 'system' &&
+            record.subtype === 'turn_duration') {
+            session.activity = 'waiting';
+            session.statusText = 'Waiting for input';
+            session.activeToolIds.clear();
+            session.activeToolNames.clear();
+            session.toolUseTimestamps.clear();
+            session.activeSubagents = 0;
+            session.hadToolsInTurn = false;
+            session.pendingSubagentToolIds.clear();
+            session.subagentToolTimestamps.clear();
+            changed = true;
         }
         else if (record.type === 'last-prompt') {
             // Session ended cleanly
@@ -286,6 +314,42 @@ export function processLine(session, line) {
                 session.lastActivityAt = Date.now();
                 changed = true;
             }
+            else if (dataType === 'agent_progress') {
+                // Parse subagent messages to track tool_use / tool_result pairs
+                const msg = data.message;
+                const msgType = msg?.type;
+                const inner = msg?.message;
+                const content = inner?.content;
+                const now = Date.now();
+                if (msgType === 'assistant' && Array.isArray(content)) {
+                    for (const block of content) {
+                        if (block.type === 'tool_use') {
+                            const id = block.id;
+                            if (id) {
+                                session.pendingSubagentToolIds.add(id);
+                                session.subagentToolTimestamps.set(id, now);
+                            }
+                        }
+                    }
+                }
+                else if (msgType === 'user' && Array.isArray(content)) {
+                    for (const block of content) {
+                        if (block.type === 'tool_result') {
+                            const id = block.tool_use_id;
+                            if (id) {
+                                session.pendingSubagentToolIds.delete(id);
+                                session.subagentToolTimestamps.delete(id);
+                            }
+                        }
+                    }
+                }
+                // Any subagent progress clears permission state
+                if (session.activity === 'permission' && session.pendingSubagentToolIds.size === 0) {
+                    session.activity = 'running';
+                    session.statusText = 'Running subtask';
+                    changed = true;
+                }
+            }
             else if (dataType === 'bash_progress' || dataType === 'mcp_progress') {
                 // Tool is running — permission was granted, clear permission state
                 if (session.activity === 'permission') {
@@ -297,6 +361,10 @@ export function processLine(session, line) {
                 const now = Date.now();
                 for (const id of session.toolUseTimestamps.keys()) {
                     session.toolUseTimestamps.set(id, now);
+                }
+                // Also reset subagent tool timestamps
+                for (const id of session.subagentToolTimestamps.keys()) {
+                    session.subagentToolTimestamps.set(id, now);
                 }
             }
         }

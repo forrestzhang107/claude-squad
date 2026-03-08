@@ -24,6 +24,9 @@ export function createSession(discovered) {
         activeToolNames: new Map(),
         toolUseTimestamps: new Map(),
         hadToolsInTurn: false,
+        respondedAt: 0,
+        pendingSubagentToolIds: new Set(),
+        subagentToolTimestamps: new Map(),
         taskSummary: '',
         workingDirectory: '',
         repoName: '',
@@ -74,51 +77,66 @@ export function startWatching(session, onChange) {
     readLastLines(session);
     const interval = setInterval(() => {
         let changed = readNewLines(session);
-        // If tools are active and we're not already showing permission state,
-        // check if any tool has been waiting long enough to suggest permission prompt
-        if (session.activeToolIds.size > 0 &&
+        // If tools are active (direct or subagent) and we're not already showing
+        // permission state, check if any tool has been waiting long enough
+        if ((session.activeToolIds.size > 0 || session.pendingSubagentToolIds.size > 0) &&
             session.activity !== 'permission' &&
             session.activity !== 'waiting' &&
             session.activity !== 'stale') {
             const now = Date.now();
-            let hasNonExempt = false;
+            let needsPermission = false;
+            // Check non-exempt tools (direct tool calls)
             for (const [id, timestamp] of session.toolUseTimestamps) {
                 const toolName = session.activeToolNames.get(id);
                 if (PERMISSION_EXEMPT_TOOLS.has(toolName || ''))
                     continue;
                 if (now - timestamp >= PERMISSION_TIMEOUT_MS) {
-                    hasNonExempt = true;
+                    needsPermission = true;
                     break;
                 }
             }
-            if (hasNonExempt) {
+            // Check subagent tools — pending tool_use with no tool_result for 7s
+            if (!needsPermission) {
+                for (const [, timestamp] of session.subagentToolTimestamps) {
+                    if (now - timestamp >= PERMISSION_TIMEOUT_MS) {
+                        needsPermission = true;
+                        break;
+                    }
+                }
+            }
+            if (needsPermission) {
                 session.activity = 'permission';
                 session.statusText = 'Requesting permission';
                 changed = true;
             }
         }
-        // If file hasn't changed and we're in a tool-related state, check for idle.
-        // Don't timeout 'active' or 'thinking' — the model is mid-response and the
-        // JSONL won't update until the full response is written. Ctrl+C writes an
-        // interrupt record that the parser handles; SIGKILL falls through to stale.
+        // Idle timeout: transition to waiting when the JSONL file stops updating.
+        // - Tool states (reading, editing, etc.) with no active tools: 10s
+        // - 'active' with respondedAt set (text record seen): 10s
+        //   (respondedAt distinguishes "Responding..." from "Starting...")
+        // - 'active' without respondedAt / 'thinking': no timeout (model is
+        //   mid-generation, JSONL won't update until response is complete)
         if (!changed &&
             session.activity !== 'waiting' &&
             session.activity !== 'stale' &&
-            session.activity !== 'permission' &&
-            session.activity !== 'active' &&
-            session.activity !== 'thinking' &&
-            session.activeToolIds.size === 0) {
-            try {
-                const stat = fs.statSync(session.jsonlFile);
-                if (Date.now() - stat.mtimeMs > IDLE_TIMEOUT_MS) {
-                    session.activity = 'waiting';
-                    session.statusText = 'Waiting for input';
-                    session.hadToolsInTurn = false;
-                    changed = true;
+            session.activity !== 'permission') {
+            const canTimeout = session.activity === 'active'
+                ? session.respondedAt > 0 // only "Responding...", not "Starting..."
+                : session.activity !== 'thinking' && session.activeToolIds.size === 0;
+            if (canTimeout) {
+                try {
+                    const stat = fs.statSync(session.jsonlFile);
+                    if (Date.now() - stat.mtimeMs > IDLE_TIMEOUT_MS) {
+                        session.activity = 'waiting';
+                        session.statusText = 'Waiting for input';
+                        session.hadToolsInTurn = false;
+                        session.respondedAt = 0;
+                        changed = true;
+                    }
                 }
-            }
-            catch {
-                // ignore
+                catch {
+                    // ignore
+                }
             }
         }
         if (changed) {
@@ -176,17 +194,18 @@ function readLastLines(session) {
             processLine(session, line);
         }
         // If the session hasn't been active recently, mark appropriately.
-        // Don't override 'active'/'thinking' — the model may be mid-response.
-        // Ctrl+C writes an interrupt record; SIGKILL falls through to stale (5min).
+        // Don't override 'thinking' or 'active' without respondedAt (model may
+        // be mid-generation). 'active' with respondedAt can timeout (text was
+        // the last record, turn is likely over).
         const age = Date.now() - stat.mtimeMs;
+        const canTimeout = session.activity === 'active'
+            ? session.respondedAt > 0
+            : session.activity !== 'thinking' && session.activeToolIds.size === 0;
         if (age > STALE_ACTIVITY_MS) {
             session.activity = 'stale';
             session.statusText = 'Inactive';
         }
-        else if (age > IDLE_TIMEOUT_MS &&
-            session.activeToolIds.size === 0 &&
-            session.activity !== 'active' &&
-            session.activity !== 'thinking') {
+        else if (age > IDLE_TIMEOUT_MS && canTimeout) {
             session.activity = 'waiting';
             session.statusText = 'Waiting for input';
         }

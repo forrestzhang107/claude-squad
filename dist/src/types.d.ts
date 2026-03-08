@@ -23,6 +23,9 @@ export interface AgentSession {
     activeToolNames: Map<string, string>;
     toolUseTimestamps: Map<string, number>;
     hadToolsInTurn: boolean;
+    respondedAt: number;
+    pendingSubagentToolIds: Set<string>;
+    subagentToolTimestamps: Map<string, number>;
     taskSummary: string;
     workingDirectory: string;
     repoName: string;

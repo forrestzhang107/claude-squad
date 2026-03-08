@@ -34,6 +34,9 @@ export interface AgentSession {
   activeToolNames: Map<string, string>;
   toolUseTimestamps: Map<string, number>;
   hadToolsInTurn: boolean;
+  respondedAt: number; // when we last saw a text-only assistant message
+  pendingSubagentToolIds: Set<string>;
+  subagentToolTimestamps: Map<string, number>;
   taskSummary: string;
   workingDirectory: string;
   repoName: string;
