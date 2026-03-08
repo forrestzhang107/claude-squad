@@ -31,6 +31,8 @@ export function createSession(discovered: DiscoveredSession): AgentSession {
     workingDirectory: '',
     repoName: '',
     recentPaths: [],
+    contextTokens: 0,
+    contextMaxTokens: 200000,
   };
 }
 
@@ -76,6 +78,7 @@ export function startWatching(
   onChange: () => void,
 ): () => void {
   skipToEnd(session);
+  readFirstTimestamp(session);
   readLastLines(session);
 
   const interval = setInterval(() => {
@@ -136,6 +139,37 @@ export function startWatching(
 }
 
 const STALE_ACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
+
+function readFirstTimestamp(session: AgentSession): void {
+  try {
+    // Read from the start of the file to find the earliest timestamp
+    const fd = fs.openSync(session.jsonlFile, 'r');
+    const buf = Buffer.alloc(8192);
+    const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+    fs.closeSync(fd);
+
+    const text = buf.toString('utf-8', 0, bytesRead);
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line);
+        // Check top-level timestamp, then snapshot.timestamp as fallback
+        const ts = record.timestamp || record.snapshot?.timestamp;
+        if (ts) {
+          const ms = new Date(ts).getTime();
+          if (ms > 0) {
+            session.sessionStartedAt = ms;
+            return;
+          }
+        }
+      } catch {
+        // malformed line, try next
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
 
 function readLastLines(session: AgentSession): void {
   try {

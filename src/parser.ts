@@ -138,6 +138,17 @@ export function processLine(session: AgentSession, line: string): boolean {
       record.type === 'assistant' &&
       Array.isArray(record.message?.content)
     ) {
+      // Extract context window usage from the API response.
+      // Total context = input_tokens + cache_read + cache_creation (input_tokens alone is just the non-cached portion)
+      const usage = record.message?.usage;
+      if (usage && typeof usage.input_tokens === 'number') {
+        session.contextTokens =
+          (usage.input_tokens || 0) +
+          (usage.cache_read_input_tokens || 0) +
+          (usage.cache_creation_input_tokens || 0);
+        changed = true;
+      }
+
       const blocks = record.message.content as Array<{
         type: string;
         id?: string;

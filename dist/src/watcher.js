@@ -28,6 +28,8 @@ export function createSession(discovered) {
         workingDirectory: '',
         repoName: '',
         recentPaths: [],
+        contextTokens: 0,
+        contextMaxTokens: 200000,
     };
 }
 export function readNewLines(session) {
@@ -68,6 +70,7 @@ export function skipToEnd(session) {
 }
 export function startWatching(session, onChange) {
     skipToEnd(session);
+    readFirstTimestamp(session);
     readLastLines(session);
     const interval = setInterval(() => {
         let changed = readNewLines(session);
@@ -120,6 +123,38 @@ export function startWatching(session, onChange) {
     return () => clearInterval(interval);
 }
 const STALE_ACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
+function readFirstTimestamp(session) {
+    try {
+        // Read from the start of the file to find the earliest timestamp
+        const fd = fs.openSync(session.jsonlFile, 'r');
+        const buf = Buffer.alloc(8192);
+        const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+        fs.closeSync(fd);
+        const text = buf.toString('utf-8', 0, bytesRead);
+        for (const line of text.split('\n')) {
+            if (!line.trim())
+                continue;
+            try {
+                const record = JSON.parse(line);
+                // Check top-level timestamp, then snapshot.timestamp as fallback
+                const ts = record.timestamp || record.snapshot?.timestamp;
+                if (ts) {
+                    const ms = new Date(ts).getTime();
+                    if (ms > 0) {
+                        session.sessionStartedAt = ms;
+                        return;
+                    }
+                }
+            }
+            catch {
+                // malformed line, try next
+            }
+        }
+    }
+    catch {
+        // ignore
+    }
+}
 function readLastLines(session) {
     try {
         const stat = fs.statSync(session.jsonlFile);

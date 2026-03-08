@@ -8,6 +8,12 @@ interface AgentCardProps {
   width: number;
 }
 
+function formatTokens(tokens: number): string {
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+  return `${tokens}`;
+}
+
 function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
@@ -58,6 +64,13 @@ export function AgentCard({session, width}: AgentCardProps) {
       {session.activeSubagents > 0 ? (
         <Text color="magenta">
           Subagents: {session.activeSubagents}
+        </Text>
+      ) : null}
+
+      {session.contextTokens > 0 ? (
+        <Text dimColor>
+          Context: {formatTokens(session.contextTokens)}{' '}
+          ({Math.round((session.contextTokens / session.contextMaxTokens) * 100)}%)
         </Text>
       ) : null}
 

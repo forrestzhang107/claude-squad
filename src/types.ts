@@ -38,6 +38,8 @@ export interface AgentSession {
   workingDirectory: string;
   repoName: string;
   recentPaths: string[];
+  contextTokens: number;
+  contextMaxTokens: number;
 }
 
 export interface DiscoveredSession {
