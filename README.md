@@ -1,14 +1,14 @@
-# claude-hq
+# claude-squad
 
 **See what all your Claude Code agents are doing -- at a glance.**
 
-If you run multiple Claude Code sessions across different projects, you know the pain: constantly switching terminals, forgetting which agent is stuck on a permission prompt, losing track of what each one is working on. claude-hq gives you a single terminal window that shows everything.
+If you run multiple Claude Code sessions across different projects, you know the pain: constantly switching terminals, forgetting which agent is stuck on a permission prompt, losing track of what each one is working on. claude-squad gives you a single terminal window that shows everything.
 
 ```
-claude-hq 4 sessions | q to quit
+claude-squad 4 sessions | q to quit
 
 ╭──────────────────────────────────────╮ ╭──────────────────────────────────────╮ ╭──────────────────────────────────────╮
-│ telvana-api (staging)                │ │ claude-hq (main)                  │ │ telvana-ui (develop)                 │
+│ telvana-api (staging)                │ │ claude-squad (main)                  │ │ telvana-ui (develop)                 │
 │ fix the campaign tag aggregation     │ │ add permission timeout detection     │ │                                      │
 │                                      │ │                                      │ │               (-_-)zzZ               │
 │              (*_*)~                  │ │              (^_^)/                  │ │                                      │
@@ -30,23 +30,23 @@ Zero config. No hooks. No API keys. Just run it.
 ## Install
 
 ```bash
-npm install -g --install-links github:forrestzhang107/claude-hq
+npm install -g @forrestzhang107/claude-squad
 ```
 
 ## Usage
 
 ```bash
-claude-hq
+claude-squad
 ```
 
 That's it. It auto-discovers every running Claude Code session and starts showing live status. Press `q` to quit.
 
 ```bash
 # Filter to a specific project
-claude-hq --project telvana
+claude-squad --project telvana
 
 # Include older/inactive sessions
-claude-hq --all
+claude-squad --all
 ```
 
 ## What You Get
@@ -79,7 +79,7 @@ Each agent card shows:
 
 ## How It Works
 
-claude-hq reads Claude Code's JSONL transcript files in `~/.claude/projects/`. It doesn't hook into Claude Code, inject anything, or use any API -- it's purely observational.
+claude-squad reads Claude Code's JSONL transcript files in `~/.claude/projects/`. It doesn't hook into Claude Code, inject anything, or use any API -- it's purely observational.
 
 - **Process matching** -- uses `ps` and `lsof` to find running Claude processes and match them to sessions
 - **Live tailing** -- polls transcript files every second for new activity

@@ -32,7 +32,7 @@ function parseRepoName(gitRoot: string): string {
     const configPath = path.join(gitRoot, '.git', 'config');
     const config = fs.readFileSync(configPath, 'utf-8');
     const match = config.match(/url\s*=\s*.*[/:]([^/]+\/[^/]+?)(?:\.git)?\s*$/m);
-    if (match) return match[1].split('/').pop() || match[1]; // e.g. "claude-hq"
+    if (match) return match[1].split('/').pop() || match[1]; // e.g. "claude-squad"
   } catch {
     // ignore
   }
