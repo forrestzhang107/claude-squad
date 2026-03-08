@@ -4,12 +4,12 @@
   "description": "Terminal dashboard for monitoring Claude Code agent sessions",
   "type": "module",
   "bin": {
-    "claude-squad": "./dist/cli.js"
+    "claude-squad": "./dist/bin/cli.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/cli.js",
+    "start": "node dist/bin/cli.js",
     "prepublishOnly": "npm run build"
   },
   "files": [

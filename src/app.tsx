@@ -1,5 +1,5 @@
 import React from 'react';
-import {Box, Text} from 'ink';
+import {Dashboard} from './components/Dashboard.js';
 
 interface AppProps {
   projectFilter?: string;
@@ -7,10 +7,5 @@ interface AppProps {
 }
 
 export function App({projectFilter, showAll}: AppProps) {
-  return (
-    <Box flexDirection="column" padding={1}>
-      <Text bold color="cyan">claude-squad</Text>
-      <Text dimColor>Scanning for active sessions...</Text>
-    </Box>
-  );
+  return <Dashboard projectFilter={projectFilter} showAll={showAll} />;
 }
