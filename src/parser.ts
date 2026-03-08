@@ -246,9 +246,12 @@ export function processLine(session: AgentSession, line: string): boolean {
           }
           if (session.activeToolIds.size === 0) {
             session.hadToolsInTurn = false;
-          }
-          // Clear permission state once tool results arrive
-          if (session.activity === 'permission') {
+            // All tools complete — model is generating next response.
+            // Set to 'active' so idle timeout doesn't fire on stale tool state.
+            session.activity = 'active';
+            session.statusText = 'Working...';
+          } else if (session.activity === 'permission') {
+            // Clear permission state once tool results arrive
             session.activity = 'active';
             session.statusText = 'Working...';
           }
@@ -260,18 +263,32 @@ export function processLine(session: AgentSession, line: string): boolean {
             .map((b: {text?: string}) => b.text || '')
             .join(' ')
             .trim();
-          if (text.length >= MIN_TASK_LENGTH) {
-            session.taskSummary = stripEmoji(text);
+
+          // Ctrl+C interrupt — agent was stopped, not given new work
+          if (text.includes('[Request interrupted by user')) {
+            session.activity = 'waiting';
+            session.statusText = 'Interrupted';
+            session.activeToolIds.clear();
+            session.activeToolNames.clear();
+            session.toolUseTimestamps.clear();
+            session.activeSubagents = 0;
+            session.hadToolsInTurn = false;
+            session.lastActivityAt = Date.now();
+            changed = true;
+          } else {
+            if (text.length >= MIN_TASK_LENGTH) {
+              session.taskSummary = stripEmoji(text);
+            }
+            session.activity = 'active';
+            session.statusText = 'Starting...';
+            session.activeToolIds.clear();
+            session.activeToolNames.clear();
+            session.toolUseTimestamps.clear();
+            session.activeSubagents = 0;
+            session.hadToolsInTurn = false;
+            session.lastActivityAt = Date.now();
+            changed = true;
           }
-          session.activity = 'active';
-          session.statusText = 'Starting...';
-          session.activeToolIds.clear();
-          session.activeToolNames.clear();
-          session.toolUseTimestamps.clear();
-          session.activeSubagents = 0;
-          session.hadToolsInTurn = false;
-          session.lastActivityAt = Date.now();
-          changed = true;
         }
       } else if (typeof content === 'string' && content.trim()) {
         if (content.trim().length >= MIN_TASK_LENGTH) {
@@ -293,6 +310,16 @@ export function processLine(session: AgentSession, line: string): boolean {
     ) {
       session.activity = 'waiting';
       session.statusText = 'Waiting for input';
+      session.activeToolIds.clear();
+      session.activeToolNames.clear();
+      session.toolUseTimestamps.clear();
+      session.activeSubagents = 0;
+      session.hadToolsInTurn = false;
+      changed = true;
+    } else if (record.type === 'last-prompt') {
+      // Session ended cleanly
+      session.activity = 'waiting';
+      session.statusText = 'Session ended';
       session.activeToolIds.clear();
       session.activeToolNames.clear();
       session.toolUseTimestamps.clear();

@@ -111,8 +111,8 @@ export function startWatching(
 
     // If file hasn't changed and we're in a tool-related state, check for idle.
     // Don't timeout 'active' or 'thinking' — the model is mid-response and the
-    // JSONL won't update until the full response is written. Only `turn_duration`
-    // should end those states.
+    // JSONL won't update until the full response is written. Ctrl+C writes an
+    // interrupt record that the parser handles; SIGKILL falls through to stale.
     if (
       !changed &&
       session.activity !== 'waiting' &&
@@ -193,12 +193,19 @@ function readLastLines(session: AgentSession): void {
       processLine(session, line);
     }
 
-    // If the session hasn't been active recently, mark appropriately
+    // If the session hasn't been active recently, mark appropriately.
+    // Don't override 'active'/'thinking' — the model may be mid-response.
+    // Ctrl+C writes an interrupt record; SIGKILL falls through to stale (5min).
     const age = Date.now() - stat.mtimeMs;
     if (age > STALE_ACTIVITY_MS) {
       session.activity = 'stale';
       session.statusText = 'Inactive';
-    } else if (age > IDLE_TIMEOUT_MS && session.activeToolIds.size === 0) {
+    } else if (
+      age > IDLE_TIMEOUT_MS &&
+      session.activeToolIds.size === 0 &&
+      session.activity !== 'active' &&
+      session.activity !== 'thinking'
+    ) {
       session.activity = 'waiting';
       session.statusText = 'Waiting for input';
     }
