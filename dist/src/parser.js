@@ -102,6 +102,18 @@ function addHistory(session, tool, status) {
         session.toolHistory.shift();
     }
 }
+/** Clear all tool tracking state and reset turn-level flags. */
+function resetToolState(session) {
+    session.respondedAt = 0;
+    session.activeToolIds.clear();
+    session.activeToolNames.clear();
+    session.toolUseTimestamps.clear();
+    session.pendingSubagentToolIds.clear();
+    session.subagentToolTimestamps.clear();
+    session.activeSubagents = 0;
+    session.hadToolsInTurn = false;
+    session.lastActivityAt = Date.now();
+}
 export function processLine(session, line) {
     let changed = false;
     try {
@@ -242,15 +254,7 @@ export function processLine(session, line) {
                     if (text.includes('[Request interrupted by user')) {
                         session.activity = 'waiting';
                         session.statusText = 'Interrupted';
-                        session.respondedAt = 0;
-                        session.activeToolIds.clear();
-                        session.activeToolNames.clear();
-                        session.toolUseTimestamps.clear();
-                        session.pendingSubagentToolIds.clear();
-                        session.subagentToolTimestamps.clear();
-                        session.activeSubagents = 0;
-                        session.hadToolsInTurn = false;
-                        session.lastActivityAt = Date.now();
+                        resetToolState(session);
                         changed = true;
                     }
                     else {
@@ -259,15 +263,7 @@ export function processLine(session, line) {
                         }
                         session.activity = 'active';
                         session.statusText = 'Starting...';
-                        session.respondedAt = 0;
-                        session.activeToolIds.clear();
-                        session.activeToolNames.clear();
-                        session.toolUseTimestamps.clear();
-                        session.pendingSubagentToolIds.clear();
-                        session.subagentToolTimestamps.clear();
-                        session.activeSubagents = 0;
-                        session.hadToolsInTurn = false;
-                        session.lastActivityAt = Date.now();
+                        resetToolState(session);
                         changed = true;
                     }
                 }
@@ -278,15 +274,7 @@ export function processLine(session, line) {
                 }
                 session.activity = 'active';
                 session.statusText = 'Starting...';
-                session.respondedAt = 0;
-                session.activeToolIds.clear();
-                session.activeToolNames.clear();
-                session.toolUseTimestamps.clear();
-                session.pendingSubagentToolIds.clear();
-                session.subagentToolTimestamps.clear();
-                session.activeSubagents = 0;
-                session.hadToolsInTurn = false;
-                session.lastActivityAt = Date.now();
+                resetToolState(session);
                 changed = true;
             }
         }
@@ -294,30 +282,13 @@ export function processLine(session, line) {
             record.subtype === 'turn_duration') {
             session.activity = 'waiting';
             session.statusText = 'Waiting for input';
-            session.respondedAt = 0;
-            session.activeToolIds.clear();
-            session.activeToolNames.clear();
-            session.toolUseTimestamps.clear();
-            session.pendingSubagentToolIds.clear();
-            session.subagentToolTimestamps.clear();
-            session.activeSubagents = 0;
-            session.hadToolsInTurn = false;
-            session.lastActivityAt = Date.now();
+            resetToolState(session);
             changed = true;
         }
         else if (record.type === 'last-prompt') {
-            // Session ended cleanly
             session.activity = 'waiting';
             session.statusText = 'Session ended';
-            session.respondedAt = 0;
-            session.activeToolIds.clear();
-            session.activeToolNames.clear();
-            session.toolUseTimestamps.clear();
-            session.pendingSubagentToolIds.clear();
-            session.subagentToolTimestamps.clear();
-            session.activeSubagents = 0;
-            session.hadToolsInTurn = false;
-            session.lastActivityAt = Date.now();
+            resetToolState(session);
             changed = true;
         }
         else if (record.type === 'progress') {

@@ -115,6 +115,19 @@ function addHistory(session: AgentSession, tool: string, status: string): void {
   }
 }
 
+/** Clear all tool tracking state and reset turn-level flags. */
+function resetToolState(session: AgentSession): void {
+  session.respondedAt = 0;
+  session.activeToolIds.clear();
+  session.activeToolNames.clear();
+  session.toolUseTimestamps.clear();
+  session.pendingSubagentToolIds.clear();
+  session.subagentToolTimestamps.clear();
+  session.activeSubagents = 0;
+  session.hadToolsInTurn = false;
+  session.lastActivityAt = Date.now();
+}
+
 export function processLine(session: AgentSession, line: string): boolean {
   let changed = false;
   try {
@@ -276,15 +289,7 @@ export function processLine(session: AgentSession, line: string): boolean {
           if (text.includes('[Request interrupted by user')) {
             session.activity = 'waiting';
             session.statusText = 'Interrupted';
-            session.respondedAt = 0;
-            session.activeToolIds.clear();
-            session.activeToolNames.clear();
-            session.toolUseTimestamps.clear();
-            session.pendingSubagentToolIds.clear();
-            session.subagentToolTimestamps.clear();
-            session.activeSubagents = 0;
-            session.hadToolsInTurn = false;
-            session.lastActivityAt = Date.now();
+            resetToolState(session);
             changed = true;
           } else {
             if (text.length >= MIN_TASK_LENGTH) {
@@ -292,15 +297,7 @@ export function processLine(session: AgentSession, line: string): boolean {
             }
             session.activity = 'active';
             session.statusText = 'Starting...';
-            session.respondedAt = 0;
-            session.activeToolIds.clear();
-            session.activeToolNames.clear();
-            session.toolUseTimestamps.clear();
-            session.pendingSubagentToolIds.clear();
-            session.subagentToolTimestamps.clear();
-            session.activeSubagents = 0;
-            session.hadToolsInTurn = false;
-            session.lastActivityAt = Date.now();
+            resetToolState(session);
             changed = true;
           }
         }
@@ -310,15 +307,7 @@ export function processLine(session: AgentSession, line: string): boolean {
         }
         session.activity = 'active';
         session.statusText = 'Starting...';
-        session.respondedAt = 0;
-        session.activeToolIds.clear();
-        session.activeToolNames.clear();
-        session.toolUseTimestamps.clear();
-        session.pendingSubagentToolIds.clear();
-        session.subagentToolTimestamps.clear();
-        session.activeSubagents = 0;
-        session.hadToolsInTurn = false;
-        session.lastActivityAt = Date.now();
+        resetToolState(session);
         changed = true;
       }
     } else if (
@@ -327,29 +316,12 @@ export function processLine(session: AgentSession, line: string): boolean {
     ) {
       session.activity = 'waiting';
       session.statusText = 'Waiting for input';
-      session.respondedAt = 0;
-      session.activeToolIds.clear();
-      session.activeToolNames.clear();
-      session.toolUseTimestamps.clear();
-      session.pendingSubagentToolIds.clear();
-      session.subagentToolTimestamps.clear();
-      session.activeSubagents = 0;
-      session.hadToolsInTurn = false;
-      session.lastActivityAt = Date.now();
+      resetToolState(session);
       changed = true;
     } else if (record.type === 'last-prompt') {
-      // Session ended cleanly
       session.activity = 'waiting';
       session.statusText = 'Session ended';
-      session.respondedAt = 0;
-      session.activeToolIds.clear();
-      session.activeToolNames.clear();
-      session.toolUseTimestamps.clear();
-      session.pendingSubagentToolIds.clear();
-      session.subagentToolTimestamps.clear();
-      session.activeSubagents = 0;
-      session.hadToolsInTurn = false;
-      session.lastActivityAt = Date.now();
+      resetToolState(session);
       changed = true;
     } else if (record.type === 'progress') {
       const data = record.data as Record<string, unknown> | undefined;

@@ -137,12 +137,7 @@ export function startWatching(
       session.activity !== 'stale' &&
       session.activity !== 'permission'
     ) {
-      const canTimeout =
-        session.activity === 'active'
-          ? session.respondedAt > 0 // only "Responding...", not "Starting..."
-          : session.activity !== 'thinking' && session.activeToolIds.size === 0;
-
-      if (canTimeout) {
+      if (canIdleTimeout(session)) {
         try {
           const stat = fs.statSync(session.jsonlFile);
           if (Date.now() - stat.mtimeMs > IDLE_TIMEOUT_MS) {
@@ -167,6 +162,17 @@ export function startWatching(
 }
 
 const STALE_ACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Whether the session's current state can transition to 'waiting' via idle timeout.
+ * 'active' with respondedAt > 0 ("Responding...") can timeout, but 'active' with
+ * respondedAt === 0 ("Starting...") and 'thinking' cannot -- the model is mid-generation
+ * and the JSONL won't update until the response is complete.
+ */
+function canIdleTimeout(session: AgentSession): boolean {
+  if (session.activity === 'active') return session.respondedAt > 0;
+  return session.activity !== 'thinking' && session.activeToolIds.size === 0;
+}
 
 function readFirstTimestamp(session: AgentSession): void {
   try {
@@ -221,14 +227,10 @@ function readLastLines(session: AgentSession): void {
     // be mid-generation). 'active' with respondedAt can timeout (text was
     // the last record, turn is likely over).
     const age = Date.now() - stat.mtimeMs;
-    const canTimeout =
-      session.activity === 'active'
-        ? session.respondedAt > 0
-        : session.activity !== 'thinking' && session.activeToolIds.size === 0;
     if (age > STALE_ACTIVITY_MS) {
       session.activity = 'stale';
       session.statusText = 'Inactive';
-    } else if (age > IDLE_TIMEOUT_MS && canTimeout) {
+    } else if (age > IDLE_TIMEOUT_MS && canIdleTimeout(session)) {
       session.activity = 'waiting';
       session.statusText = 'Waiting for input';
     }
