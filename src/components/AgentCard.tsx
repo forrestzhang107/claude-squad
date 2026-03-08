@@ -53,10 +53,6 @@ export function AgentCard({session, width}: AgentCardProps) {
         <Text color={color}>{character.art}</Text>
       </Box>
 
-      <Box height={2} overflow="hidden" marginBottom={1}>
-        <Text dimColor wrap="wrap">{session.lastResponseText || ' '}</Text>
-      </Box>
-
       <Text color={color} wrap="truncate">{session.statusText}</Text>
 
       {session.currentFile ? (
@@ -80,17 +76,9 @@ export function AgentCard({session, width}: AgentCardProps) {
         <Text dimColor>Session: {duration}</Text>
       ) : null}
 
-      {session.toolHistory.length > 0 ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>Recent:</Text>
-          {session.toolHistory.map((entry, i) => (
-            <Text key={i} dimColor wrap="truncate">
-              {i === session.toolHistory.length - 1 ? ' > ' : '   '}
-              {entry.status}
-            </Text>
-          ))}
-        </Box>
-      ) : null}
+      <Box height={3} overflow="hidden" marginTop={1}>
+        <Text dimColor wrap="wrap">{session.lastResponseText || ' '}</Text>
+      </Box>
     </Box>
   );
 }
