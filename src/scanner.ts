@@ -17,7 +17,7 @@ function getActiveClaudeDirs(): Map<string, number> {
 
     for (const pid of pids) {
       try {
-        const output = execSync(`lsof -p ${pid} -d cwd -Fn 2>/dev/null | grep '^n'`, {
+        const output = execSync(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null | grep '^n' | head -1`, {
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe'],
         }).trim();
