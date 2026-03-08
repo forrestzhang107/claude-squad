@@ -3,6 +3,7 @@ import { processLine } from './parser.js';
 const POLL_INTERVAL_MS = 1000;
 const PERMISSION_TIMEOUT_MS = 7000;
 const IDLE_TIMEOUT_MS = 10000; // 10s with no file changes → waiting
+const PERMISSION_EXEMPT_TOOLS = new Set(['Agent', 'Task', 'AskUserQuestion', 'Skill']);
 export function createSession(discovered) {
     return {
         sessionId: discovered.sessionId,
@@ -77,13 +78,20 @@ export function startWatching(session, onChange) {
             session.activity !== 'waiting' &&
             session.activity !== 'stale') {
             const now = Date.now();
-            for (const [, timestamp] of session.toolUseTimestamps) {
+            let hasNonExempt = false;
+            for (const [id, timestamp] of session.toolUseTimestamps) {
+                const toolName = session.activeToolNames.get(id);
+                if (PERMISSION_EXEMPT_TOOLS.has(toolName || ''))
+                    continue;
                 if (now - timestamp >= PERMISSION_TIMEOUT_MS) {
-                    session.activity = 'permission';
-                    session.statusText = 'Requesting permission';
-                    changed = true;
+                    hasNonExempt = true;
                     break;
                 }
+            }
+            if (hasNonExempt) {
+                session.activity = 'permission';
+                session.statusText = 'Requesting permission';
+                changed = true;
             }
         }
         // If file hasn't changed and we're in an active state, check for idle

@@ -12,6 +12,10 @@ npm run dev      # Watch mode
 npm run start    # Run the dashboard
 ```
 
+## Git Policy
+
+Do NOT commit, push, or perform any git actions unless explicitly asked. This includes staging files, creating commits, and pushing to remote.
+
 ## Key Conventions
 
 - ESM (`"type": "module"`)
