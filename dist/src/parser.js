@@ -159,11 +159,11 @@ export function processLine(session, line) {
                             changed = true;
                         }
                     }
-                    // Track subagents
-                    if (toolName === 'Agent' || toolName === 'Task') {
-                        session.activeSubagents++;
-                    }
                     if (tool.id) {
+                        // Track subagents
+                        if (toolName === 'Agent' || toolName === 'Task') {
+                            session.activeSubagents++;
+                        }
                         session.activeToolIds.add(tool.id);
                         session.activeToolNames.set(tool.id, toolName);
                         session.toolUseTimestamps.set(tool.id, Date.now());
@@ -221,12 +221,14 @@ export function processLine(session, line) {
                         // Set to 'active' so idle timeout doesn't fire on stale tool state.
                         session.activity = 'active';
                         session.statusText = 'Working...';
+                        session.respondedAt = 0;
                     }
                     else if (session.activity === 'permission') {
                         // Clear permission state once tool results arrive
                         session.activity = 'active';
                         session.statusText = 'Working...';
                     }
+                    session.lastActivityAt = Date.now();
                     changed = true;
                 }
                 else {
@@ -240,9 +242,12 @@ export function processLine(session, line) {
                     if (text.includes('[Request interrupted by user')) {
                         session.activity = 'waiting';
                         session.statusText = 'Interrupted';
+                        session.respondedAt = 0;
                         session.activeToolIds.clear();
                         session.activeToolNames.clear();
                         session.toolUseTimestamps.clear();
+                        session.pendingSubagentToolIds.clear();
+                        session.subagentToolTimestamps.clear();
                         session.activeSubagents = 0;
                         session.hadToolsInTurn = false;
                         session.lastActivityAt = Date.now();
@@ -258,6 +263,8 @@ export function processLine(session, line) {
                         session.activeToolIds.clear();
                         session.activeToolNames.clear();
                         session.toolUseTimestamps.clear();
+                        session.pendingSubagentToolIds.clear();
+                        session.subagentToolTimestamps.clear();
                         session.activeSubagents = 0;
                         session.hadToolsInTurn = false;
                         session.lastActivityAt = Date.now();
@@ -275,6 +282,8 @@ export function processLine(session, line) {
                 session.activeToolIds.clear();
                 session.activeToolNames.clear();
                 session.toolUseTimestamps.clear();
+                session.pendingSubagentToolIds.clear();
+                session.subagentToolTimestamps.clear();
                 session.activeSubagents = 0;
                 session.hadToolsInTurn = false;
                 session.lastActivityAt = Date.now();
@@ -285,24 +294,30 @@ export function processLine(session, line) {
             record.subtype === 'turn_duration') {
             session.activity = 'waiting';
             session.statusText = 'Waiting for input';
+            session.respondedAt = 0;
             session.activeToolIds.clear();
             session.activeToolNames.clear();
             session.toolUseTimestamps.clear();
-            session.activeSubagents = 0;
-            session.hadToolsInTurn = false;
             session.pendingSubagentToolIds.clear();
             session.subagentToolTimestamps.clear();
+            session.activeSubagents = 0;
+            session.hadToolsInTurn = false;
+            session.lastActivityAt = Date.now();
             changed = true;
         }
         else if (record.type === 'last-prompt') {
             // Session ended cleanly
             session.activity = 'waiting';
             session.statusText = 'Session ended';
+            session.respondedAt = 0;
             session.activeToolIds.clear();
             session.activeToolNames.clear();
             session.toolUseTimestamps.clear();
+            session.pendingSubagentToolIds.clear();
+            session.subagentToolTimestamps.clear();
             session.activeSubagents = 0;
             session.hadToolsInTurn = false;
+            session.lastActivityAt = Date.now();
             changed = true;
         }
         else if (record.type === 'progress') {
