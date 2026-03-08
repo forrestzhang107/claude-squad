@@ -42,6 +42,31 @@ function getActiveClaudeDirs() {
     }
     return counts;
 }
+/** Check if the last record in a JSONL file is a last-prompt (session ended cleanly). */
+function isSessionEnded(jsonlFile) {
+    try {
+        const stat = fs.statSync(jsonlFile);
+        const readSize = Math.min(stat.size, 4096);
+        const buf = Buffer.alloc(readSize);
+        const fd = fs.openSync(jsonlFile, 'r');
+        try {
+            fs.readSync(fd, buf, 0, readSize, stat.size - readSize);
+        }
+        finally {
+            fs.closeSync(fd);
+        }
+        const text = buf.toString('utf-8');
+        const lines = text.split('\n').filter(Boolean);
+        const lastLine = lines[lines.length - 1];
+        if (!lastLine)
+            return false;
+        const record = JSON.parse(lastLine);
+        return record.type === 'last-prompt';
+    }
+    catch {
+        return false;
+    }
+}
 export function extractProjectName(dirName) {
     // The dir name is the full path with non-alphanumeric chars replaced by '-'
     // e.g. "/Users/forrest/Repos/telvana/telvana-api" -> "-Users-forrest-Repos-telvana-telvana-api"
@@ -113,9 +138,6 @@ export function scanSessions(options) {
             catch {
                 continue;
             }
-            if (!showAll && now - fileStat.mtimeMs > STALE_THRESHOLD_MS) {
-                continue;
-            }
             const sessionId = path.basename(file, '.jsonl');
             sessions.push({
                 sessionId,
@@ -127,12 +149,38 @@ export function scanSessions(options) {
             });
         }
     }
-    // Sort by modifiedAt descending so we always prefer the most recently written files
-    sessions.sort((a, b) => b.modifiedAt - a.modifiedAt);
+    // Get active claude process directories (encoded as project-dir-names)
+    const activeDirCounts = getActiveClaudeDirs();
+    // Filter stale sessions, but keep all sessions for dirs with active processes
+    // (a long-idle but still-running session shouldn't be excluded by age)
+    const filtered = sessions.filter((s) => {
+        if (showAll)
+            return true;
+        if (activeDirCounts.has(s.projectDir))
+            return true;
+        return now - s.modifiedAt <= STALE_THRESHOLD_MS;
+    });
+    // Sort by modifiedAt descending, but deprioritize ended sessions.
+    // A closed session writes last-prompt as its final record, making its mtime
+    // more recent than a long-idle but still-running session.
+    // Only check sessions in dirs with active processes (where sort order matters).
+    const endedSessions = new Set();
+    for (const s of filtered) {
+        if (activeDirCounts.has(s.projectDir) && isSessionEnded(s.jsonlFile)) {
+            endedSessions.add(s.sessionId);
+        }
+    }
+    filtered.sort((a, b) => {
+        const aEnded = endedSessions.has(a.sessionId) ? 1 : 0;
+        const bEnded = endedSessions.has(b.sessionId) ? 1 : 0;
+        if (aEnded !== bEnded)
+            return aEnded - bEnded; // non-ended first
+        return b.modifiedAt - a.modifiedAt;
+    });
     if (showAll) {
         // Show all, deduplicated to one per project (most recently modified wins)
         const seen = new Set();
-        const all = sessions.filter((s) => {
+        const all = filtered.filter((s) => {
             if (seen.has(s.projectDir))
                 return false;
             seen.add(s.projectDir);
@@ -141,17 +189,11 @@ export function scanSessions(options) {
         all.sort((a, b) => a.createdAt - b.createdAt);
         return all;
     }
-    // Get active claude process directories (encoded as project-dir-names)
-    const activeDirCounts = getActiveClaudeDirs();
     // For each active dir, keep N most recently modified sessions (N = process count).
-    // Matching is done on the encoded dir name directly — no lossy path reconstruction.
+    // Sessions are already sorted by modifiedAt desc, so first N per dir are the active ones.
     const result = [];
-    const allowance = new Map();
-    for (const [dirName, count] of activeDirCounts) {
-        allowance.set(dirName, count);
-    }
-    // sessions are sorted by modifiedAt desc, so first N per dir are the active ones
-    for (const s of sessions) {
+    const allowance = new Map(activeDirCounts);
+    for (const s of filtered) {
         const remaining = allowance.get(s.projectDir);
         if (remaining !== undefined && remaining > 0) {
             result.push(s);
