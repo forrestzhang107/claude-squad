@@ -47,9 +47,7 @@ export function AgentCard({session, width}: AgentCardProps) {
         ) : null}
       </Text>
 
-      {session.taskSummary ? (
-        <Text dimColor italic wrap="truncate-end">{session.taskSummary}</Text>
-      ) : null}
+      <Text dimColor italic wrap="truncate-end">{session.taskSummary || ' '}</Text>
 
       <Box justifyContent="center" marginY={1}>
         <Text color={color}>{character.art}</Text>
