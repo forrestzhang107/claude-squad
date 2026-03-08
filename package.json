@@ -12,12 +12,6 @@
     "start": "node dist/bin/cli.js",
     "prepublishOnly": "npm run build"
   },
-  "files": [
-    "dist",
-    "src",
-    "bin",
-    "tsconfig.json"
-  ],
   "keywords": [
     "claude",
     "cli",
