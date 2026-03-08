@@ -27,6 +27,9 @@ export function createSession(discovered: DiscoveredSession): AgentSession {
     toolUseTimestamps: new Map(),
     hadToolsInTurn: false,
     taskSummary: '',
+    workingDirectory: '',
+    repoName: '',
+    recentPaths: [],
   };
 }
 
@@ -144,10 +147,14 @@ function readLastLines(session: AgentSession): void {
       processLine(session, line);
     }
 
-    // If the session hasn't been active recently, it's idle
-    if (Date.now() - stat.mtimeMs > STALE_ACTIVITY_MS && session.activity !== 'stale') {
+    // If the session hasn't been active recently, mark appropriately
+    const age = Date.now() - stat.mtimeMs;
+    if (age > STALE_ACTIVITY_MS) {
       session.activity = 'stale';
       session.statusText = 'Inactive';
+    } else if (age > IDLE_TIMEOUT_MS && session.activeToolIds.size === 0) {
+      session.activity = 'waiting';
+      session.statusText = 'Waiting for input';
     }
 
     session.fileOffset = stat.size;

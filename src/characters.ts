@@ -7,7 +7,7 @@ interface CharacterFrame {
 
 const characters: Record<AgentActivity, CharacterFrame> = {
   waiting: {
-    art: '(._.)...',
+    art: '(^_^)',
     label: 'Waiting',
   },
   stale: {
@@ -15,7 +15,7 @@ const characters: Record<AgentActivity, CharacterFrame> = {
     label: 'Sleeping',
   },
   active: {
-    art: '(^_^)',
+    art: '(^_^)♪',
     label: 'Working',
   },
   thinking: {

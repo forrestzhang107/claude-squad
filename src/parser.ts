@@ -1,9 +1,78 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {AgentActivity, AgentSession} from './types.js';
 
 const BASH_CMD_MAX = 40;
 const MAX_HISTORY = 4;
 const MIN_TASK_LENGTH = 20;
+const MAX_RECENT_PATHS = 20;
+
+// Strip emoji and other wide Unicode characters that break terminal column alignment
+const EMOJI_RE = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{2B50}\u{2B55}\u{231A}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25FE}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu;
+function stripEmoji(text: string): string {
+  return text.replace(EMOJI_RE, '');
+}
+
+function findGitRoot(dir: string): string {
+  let current = dir;
+  while (current !== '/') {
+    try {
+      const gitPath = path.join(current, '.git');
+      if (fs.existsSync(gitPath)) return current;
+    } catch {
+      // ignore
+    }
+    current = path.dirname(current);
+  }
+  return '';
+}
+
+function parseRepoName(gitRoot: string): string {
+  try {
+    const configPath = path.join(gitRoot, '.git', 'config');
+    const config = fs.readFileSync(configPath, 'utf-8');
+    const match = config.match(/url\s*=\s*.*[/:]([^/]+\/[^/]+?)(?:\.git)?\s*$/m);
+    if (match) return match[1].split('/').pop() || match[1]; // e.g. "claude-squad"
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
+function extractDir(filePath: unknown): string {
+  if (typeof filePath !== 'string' || !filePath.startsWith('/')) return '';
+  return path.dirname(filePath);
+}
+
+function detectWorkingDirectory(paths: string[]): string {
+  if (paths.length === 0) return '';
+
+  // Count directory frequency
+  const counts = new Map<string, number>();
+  for (const p of paths) {
+    // Walk up the path and count each ancestor
+    let dir = p;
+    while (dir !== '/' && dir) {
+      counts.set(dir, (counts.get(dir) || 0) + 1);
+      dir = path.dirname(dir);
+    }
+  }
+
+  // Find the deepest directory that appears in most paths
+  let best = '';
+  let bestScore = 0;
+  for (const [dir, count] of counts) {
+    // Score = frequency * depth (prefer deeper, common directories)
+    const depth = dir.split('/').length;
+    const score = count * depth;
+    if (score > bestScore) {
+      bestScore = score;
+      best = dir;
+    }
+  }
+
+  return best;
+}
 
 function formatToolStatus(
   toolName: string,
@@ -20,7 +89,7 @@ function formatToolStatus(
     case 'Write':
       return {activity: 'editing', statusText: `Writing ${base(input.file_path)}`, file: base(input.file_path)};
     case 'Bash': {
-      const cmd = (input.command as string) || '';
+      const cmd = stripEmoji((input.command as string) || '');
       const truncated =
         cmd.length > BASH_CMD_MAX ? cmd.slice(0, BASH_CMD_MAX) + '...' : cmd;
       return {activity: 'running', statusText: `$ ${truncated}`};
@@ -90,6 +159,25 @@ export function processLine(session: AgentSession, line: string): boolean {
 
           if (file) {
             session.currentFile = file;
+          }
+
+          // Collect file paths for working directory detection
+          const input = tool.input || {};
+          const dir = extractDir(input.file_path) || extractDir(input.path);
+          if (dir) {
+            session.recentPaths.push(dir);
+            if (session.recentPaths.length > MAX_RECENT_PATHS) {
+              session.recentPaths.shift();
+            }
+            const detected = detectWorkingDirectory(session.recentPaths);
+            if (detected && detected !== session.workingDirectory) {
+              session.workingDirectory = detected;
+              const gitRoot = findGitRoot(detected);
+              if (gitRoot) {
+                session.repoName = parseRepoName(gitRoot) || path.basename(gitRoot);
+              }
+              changed = true;
+            }
           }
 
           // Track subagents
@@ -162,7 +250,7 @@ export function processLine(session: AgentSession, line: string): boolean {
             .join(' ')
             .trim();
           if (text.length >= MIN_TASK_LENGTH) {
-            session.taskSummary = text;
+            session.taskSummary = stripEmoji(text);
           }
           session.activity = 'active';
           session.statusText = 'Starting...';
@@ -176,7 +264,7 @@ export function processLine(session: AgentSession, line: string): boolean {
         }
       } else if (typeof content === 'string' && content.trim()) {
         if (content.trim().length >= MIN_TASK_LENGTH) {
-          session.taskSummary = content.trim();
+          session.taskSummary = stripEmoji(content.trim());
         }
         session.activity = 'active';
         session.statusText = 'Starting...';
@@ -209,7 +297,13 @@ export function processLine(session: AgentSession, line: string): boolean {
         session.lastActivityAt = Date.now();
         changed = true;
       } else if (dataType === 'bash_progress' || dataType === 'mcp_progress') {
-        // Tool is still running — reset all timestamps to restart the permission timer
+        // Tool is running — permission was granted, clear permission state
+        if (session.activity === 'permission') {
+          session.activity = 'running';
+          session.statusText = 'Running...';
+          changed = true;
+        }
+        // Reset all timestamps to restart the permission timer
         const now = Date.now();
         for (const id of session.toolUseTimestamps.keys()) {
           session.toolUseTimestamps.set(id, now);

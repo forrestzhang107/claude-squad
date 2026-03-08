@@ -35,6 +35,9 @@ export interface AgentSession {
   toolUseTimestamps: Map<string, number>;
   hadToolsInTurn: boolean;
   taskSummary: string;
+  workingDirectory: string;
+  repoName: string;
+  recentPaths: string[];
 }
 
 export interface DiscoveredSession {
