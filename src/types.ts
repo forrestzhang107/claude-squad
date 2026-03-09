@@ -44,6 +44,7 @@ export interface AgentSession {
   contextTokens: number;
   contextMaxTokens: number;
   lastResponseText: string;
+  pid: number;
 }
 
 export interface DiscoveredSession {
@@ -53,4 +54,5 @@ export interface DiscoveredSession {
   jsonlFile: string;
   modifiedAt: number;
   createdAt: number;
+  pid: number;
 }

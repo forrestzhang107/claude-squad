@@ -6,6 +6,7 @@ import type {AgentSession} from '../types.js';
 interface AgentCardProps {
   session: AgentSession;
   width: number;
+  selected?: boolean;
 }
 
 function formatTokens(tokens: number): string {
@@ -24,7 +25,7 @@ function formatDuration(ms: number): string {
   return `${hours}h${remainingMin > 0 ? `${remainingMin}m` : ''}`;
 }
 
-export function AgentCard({session, width}: AgentCardProps) {
+export function AgentCard({session, width, selected}: AgentCardProps) {
   const character = getCharacter(session.activity);
   const color = getActivityColor(session.activity);
   const now = Date.now();
@@ -50,7 +51,7 @@ export function AgentCard({session, width}: AgentCardProps) {
       <Text dimColor italic wrap="truncate-end">{session.taskSummary || ' '}</Text>
 
       <Box justifyContent="center" marginY={1}>
-        <Text color={color}>{character.art}</Text>
+        <Text color="greenBright">{selected ? '> ' : '  '}</Text><Text color={color}>{character.art}</Text>
       </Box>
 
       <Text color={color} wrap="truncate">{session.statusText}</Text>

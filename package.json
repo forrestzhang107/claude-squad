@@ -19,6 +19,9 @@
     "dashboard",
     "agent"
   ],
+  "files": [
+    "dist/"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18"

@@ -37,6 +37,7 @@ export function createSession(discovered: DiscoveredSession): AgentSession {
     contextTokens: 0,
     contextMaxTokens: 200000,
     lastResponseText: '',
+    pid: discovered.pid,
   };
 }
 

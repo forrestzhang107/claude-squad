@@ -4,6 +4,7 @@ import {scanSessions} from '../scanner.js';
 import {createSession, startWatching} from '../watcher.js';
 import type {AgentSession} from '../types.js';
 import {AgentCard} from './AgentCard.js';
+import {switchToTerminalTab} from '../terminal.js';
 
 interface DashboardProps {
   projectFilter?: string;
@@ -17,10 +18,27 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
   const {exit} = useApp();
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [tick, setTick] = useState(0);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  useEffect(() => {
+    setSelectedIndex((i) => Math.min(i, Math.max(0, sessions.length - 1)));
+  }, [sessions.length]);
 
   useInput((input, key) => {
     if (input === 'q' || (input === 'c' && key.ctrl)) {
       exit();
+    }
+    if (key.leftArrow) {
+      setSelectedIndex((i) => Math.max(0, i - 1));
+    }
+    if (key.rightArrow) {
+      setSelectedIndex((i) => Math.min(sessions.length - 1, i + 1));
+    }
+    if (key.return) {
+      const session = sessions[selectedIndex];
+      if (session?.pid) {
+        switchToTerminalTab(session.pid);
+      }
     }
   });
 
@@ -46,7 +64,11 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
 
       // Add newly discovered sessions
       for (const d of discovered) {
-        if (tracked.has(d.jsonlFile)) continue;
+        const existing = tracked.get(d.jsonlFile);
+        if (existing) {
+          existing.pid = d.pid;
+          continue;
+        }
 
         const session = createSession(d);
         tracked.set(d.jsonlFile, session);
@@ -84,17 +106,18 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
       <Box marginBottom={1}>
         <Text bold color="cyan">claude-squad </Text>
         <Text dimColor>
-          {sessions.length} session{sessions.length !== 1 ? 's' : ''} | q to
-          quit
+          {sessions.length} session{sessions.length !== 1 ? 's' : ''} | ←→
+          navigate | enter: switch terminal | q: quit
         </Text>
       </Box>
 
       <Box flexDirection="row" flexWrap="wrap" gap={1}>
-        {sessions.map((session) => (
+        {sessions.map((session, i) => (
           <AgentCard
             key={session.jsonlFile}
             session={session}
             width={CARD_WIDTH}
+            selected={i === selectedIndex}
           />
         ))}
       </Box>

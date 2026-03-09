@@ -13,19 +13,40 @@ function pathToDirName(fsPath: string): string {
 }
 
 /**
- * Returns a map of encoded project-dir-name -> number of active claude processes.
- * Uses the same encoding Claude uses (replace non-alphanumeric with '-') so we can
- * match directly against the directory names under ~/.claude/projects/.
+ * Returns a map of session-id -> PID by parsing --resume args from claude processes,
+ * and a map of encoded project-dir-name -> count of all active claude processes.
  */
-function getActiveClaudeDirs(): Map<string, number> {
-  const counts = new Map<string, number>();
+function getActiveClaudeProcesses(): {
+  sessionPids: Map<string, number>;
+  dirPids: Map<string, number[]>;
+} {
+  const sessionPids = new Map<string, number>();
+  const dirPids = new Map<string, number[]>();
   try {
+    // Get all claude PIDs (bare "claude" processes, not substrings like "claude-squad")
     const pids = execSync("ps -eo pid,comm | grep -w 'claude$' | awk '{print $1}'", {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim().split('\n').filter(Boolean);
 
-    for (const pid of pids) {
+    for (const pidStr of pids) {
+      const pid = parseInt(pidStr, 10);
+
+      // Check for --resume to get exact session ID mapping
+      try {
+        const args = execSync(`ps -o args= -p ${pid}`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        const match = args.match(/--resume[=\s]+([0-9a-f-]+)/);
+        if (match) {
+          sessionPids.set(match[1], pid);
+        }
+      } catch {
+        // Process may have exited
+      }
+
+      // Resolve CWD for active-dir counting (all processes, not just --resume)
       try {
         const output = execSync(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null | grep '^n' | head -1`, {
           encoding: 'utf-8',
@@ -34,7 +55,8 @@ function getActiveClaudeDirs(): Map<string, number> {
         if (output) {
           const cwd = output.startsWith('n') ? output.slice(1) : output;
           const dirName = pathToDirName(cwd);
-          counts.set(dirName, (counts.get(dirName) || 0) + 1);
+          if (!dirPids.has(dirName)) dirPids.set(dirName, []);
+          dirPids.get(dirName)!.push(pid);
         }
       } catch {
         // Process may have exited
@@ -43,7 +65,7 @@ function getActiveClaudeDirs(): Map<string, number> {
   } catch {
     // No claude processes
   }
-  return counts;
+  return {sessionPids, dirPids};
 }
 
 /** Check if the last record in a JSONL file is a last-prompt (session ended cleanly). */
@@ -104,6 +126,16 @@ export function extractProjectName(dirName: string): string {
   return buffer || path.basename(resolved);
 }
 
+/** Assign PIDs to sessions using exact session-ID matches. */
+function assignPids(sessions: DiscoveredSession[], sessionPids: Map<string, number>): void {
+  for (const s of sessions) {
+    const pid = sessionPids.get(s.sessionId);
+    if (pid !== undefined) {
+      s.pid = pid;
+    }
+  }
+}
+
 export function scanSessions(options: {
   showAll?: boolean;
   projectFilter?: string;
@@ -160,18 +192,19 @@ export function scanSessions(options: {
         jsonlFile: filePath,
         modifiedAt: fileStat.mtimeMs,
         createdAt: fileStat.birthtimeMs,
+        pid: 0,
       });
     }
   }
 
-  // Get active claude process directories (encoded as project-dir-names)
-  const activeDirCounts = getActiveClaudeDirs();
+  // Get active claude processes: exact session->PID mapping and per-dir PID lists
+  const {sessionPids, dirPids} = getActiveClaudeProcesses();
 
   // Filter stale sessions, but keep all sessions for dirs with active processes
   // (a long-idle but still-running session shouldn't be excluded by age)
   const filtered = sessions.filter((s) => {
     if (showAll) return true;
-    if (activeDirCounts.has(s.projectDir)) return true;
+    if (dirPids.has(s.projectDir)) return true;
     return now - s.modifiedAt <= STALE_THRESHOLD_MS;
   });
 
@@ -181,7 +214,7 @@ export function scanSessions(options: {
   // Only check sessions in dirs with active processes (where sort order matters).
   const endedSessions = new Set<string>();
   for (const s of filtered) {
-    if (activeDirCounts.has(s.projectDir) && isSessionEnded(s.jsonlFile)) {
+    if (dirPids.has(s.projectDir) && isSessionEnded(s.jsonlFile)) {
       endedSessions.add(s.sessionId);
     }
   }
@@ -195,25 +228,36 @@ export function scanSessions(options: {
   if (showAll) {
     // Show all, deduplicated to one per project (most recently modified wins)
     const seen = new Set<string>();
-    const all = filtered.filter((s) => {
+    const result = filtered.filter((s) => {
       if (seen.has(s.projectDir)) return false;
       seen.add(s.projectDir);
       return true;
     });
-    all.sort((a, b) => a.createdAt - b.createdAt);
-    return all;
+    assignPids(result, sessionPids);
+    result.sort((a, b) => a.createdAt - b.createdAt);
+    return result;
   }
 
   // For each active dir, keep N most recently modified sessions (N = process count).
   // Sessions are already sorted by modifiedAt desc, so first N per dir are the active ones.
+  // Assign exact PIDs by session ID where possible, fall back to dir-based assignment.
   const result: DiscoveredSession[] = [];
-  const allowance = new Map(activeDirCounts);
+  const pidQueues = new Map<string, number[]>();
+  for (const [dirName, pids] of dirPids) {
+    pidQueues.set(dirName, [...pids]);
+  }
 
   for (const s of filtered) {
-    const remaining = allowance.get(s.projectDir);
-    if (remaining !== undefined && remaining > 0) {
+    const queue = pidQueues.get(s.projectDir);
+    if (queue && queue.length > 0) {
+      const exactPid = sessionPids.get(s.sessionId);
+      if (exactPid !== undefined && queue.includes(exactPid)) {
+        s.pid = exactPid;
+        queue.splice(queue.indexOf(exactPid), 1);
+      } else {
+        s.pid = queue.shift()!;
+      }
       result.push(s);
-      allowance.set(s.projectDir, remaining - 1);
     }
   }
 
