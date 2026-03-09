@@ -8,12 +8,12 @@ const MAX_RECENT_PATHS = 20;
 
 // Strip emoji and other wide Unicode characters that break terminal column alignment
 const EMOJI_RE = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{2B50}\u{2B55}\u{231A}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25FE}\u{2702}-\u{27B0}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu;
-function stripEmoji(text: string): string {
+export function stripEmoji(text: string): string {
   return text.replace(EMOJI_RE, '');
 }
 
 // Strip system-injected XML tags (e.g. <system-reminder>, <local-command-caveat>) from user prompts
-function stripSystemTags(text: string): string {
+export function stripSystemTags(text: string): string {
   return text
     .replace(/<[a-zA-Z_-]+>[\s\S]*?<\/[a-zA-Z_-]+>/g, '')
     .replace(/<[a-zA-Z_-]+\/>/g, '')
@@ -61,7 +61,7 @@ function extractDir(filePath: unknown): string {
   return path.dirname(filePath);
 }
 
-function detectWorkingDirectory(paths: string[]): string {
+export function detectWorkingDirectory(paths: string[]): string {
   if (paths.length === 0) return '';
 
   // Count directory frequency
@@ -91,7 +91,7 @@ function detectWorkingDirectory(paths: string[]): string {
   return best;
 }
 
-function formatToolStatus(
+export function formatToolStatus(
   toolName: string,
   input: Record<string, unknown>,
 ): {activity: AgentActivity; statusText: string; file?: string} {
@@ -133,7 +133,7 @@ function addHistory(session: AgentSession, tool: string, status: string): void {
 }
 
 /** Extract joined text from an array of content blocks. */
-function extractText(blocks: Array<{type: string; text?: string}>): string {
+export function extractText(blocks: Array<{type: string; text?: string}>): string {
   return blocks
     .filter((b) => b.type === 'text' && b.text)
     .map((b) => b.text!)
@@ -142,12 +142,12 @@ function extractText(blocks: Array<{type: string; text?: string}>): string {
 }
 
 /** Clean user prompt text for display. */
-function cleanPrompt(text: string): string {
-  return stripEmoji(stripSystemTags(text));
+export function cleanPrompt(text: string): string {
+  return stripEmoji(stripSystemTags(text)).trim();
 }
 
 /** Apply state changes when a new user prompt starts a fresh task. Returns true if applied. */
-function applyNewPrompt(session: AgentSession, rawText: string): boolean {
+export function applyNewPrompt(session: AgentSession, rawText: string): boolean {
   const cleaned = cleanPrompt(rawText);
   if (!cleaned) return false;
   session.taskSummary = cleaned;
@@ -159,7 +159,7 @@ function applyNewPrompt(session: AgentSession, rawText: string): boolean {
 }
 
 /** Clear all tool tracking state and reset turn-level flags. */
-function resetToolState(session: AgentSession): void {
+export function resetToolState(session: AgentSession): void {
   session.respondedAt = 0;
   session.activeToolIds.clear();
   session.activeToolNames.clear();

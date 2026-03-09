@@ -7,7 +7,7 @@ const PERMISSION_TIMEOUT_MS = 7000;
 const INACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 60m with no file changes → inactive
 const PERMISSION_EXEMPT_TOOLS = new Set(['Agent', 'Task', 'AskUserQuestion', 'Skill']);
 
-function applyInactiveTransition(session: AgentSession, ageMs: number): boolean {
+export function applyInactiveTransition(session: AgentSession, ageMs: number): boolean {
   if (ageMs > INACTIVE_TIMEOUT_MS && session.activity !== 'inactive') {
     session.activity = 'inactive';
     session.statusText = 'Inactive';
