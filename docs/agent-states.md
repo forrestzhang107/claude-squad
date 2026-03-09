@@ -4,8 +4,9 @@
 
 | Activity | Face | Color | Label | Triggered By |
 |----------|------|-------|-------|-------------|
-| `waiting` | `(^_^)` | white | Waiting | Turn end (see below), interrupt, or idle timeout |
-| `stale` | `(-_-)zzZ` | gray | Sleeping | JSONL file unmodified for 5+ minutes |
+| `waiting` | `(·‿·)` | white | Waiting | Turn end (see below), interrupt, or idle timeout |
+| `bored` | `(._.)` | gray | Inactive | JSONL file unmodified for 10–60 minutes |
+| `stale` | `(-_-)zzZ` | gray | Inactive | JSONL file unmodified for 60+ minutes |
 | `active` | `(^_^)♪` | cyan | Working | New user prompt ("Starting...") or assistant text block ("Responding...") |
 | `thinking` | `(o.o)...` | cyan | Thinking | Assistant `thinking` block (no tool_use in same message) |
 | `reading` | `(o_o) ` | cyan | Reading | `Read` tool use |
@@ -49,7 +50,12 @@ New user prompt  -->  active ("Starting...", respondedAt=0)
          v                          v
     active ("Working...")     waiting ("Waiting for input")
     (all tools done)                |
-                              (5 min pass)
+                              (10 min pass)
+                                    |
+                                    v
+                              bored ("Inactive")
+                                    |
+                              (60 min pass)
                                     |
                                     v
                               stale ("Inactive")
@@ -106,8 +112,9 @@ events, which contain the subagent's full messages:
 4. `bash_progress` / `mcp_progress` reset subagent tool timestamps too
 5. When the parent Agent/Task tool completes, all subagent tracking is cleared
 
-## Stale Detection
+## Inactivity Detection
 
-If the JSONL file's mtime exceeds 5 minutes (`STALE_ACTIVITY_MS`), the session
-is marked `stale` regardless of current state. This handles cases where the
-agent process was killed without writing any termination record (e.g. SIGKILL).
+If the JSONL file's mtime exceeds 10 minutes (`BORED_ACTIVITY_MS`), the session
+is marked `bored`. After 60 minutes (`STALE_ACTIVITY_MS`), it transitions to
+`stale`. This handles cases where the agent is idle or the process was killed
+without writing any termination record (e.g. SIGKILL).

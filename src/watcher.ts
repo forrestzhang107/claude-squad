@@ -5,7 +5,34 @@ import {processLine} from './parser.js';
 const POLL_INTERVAL_MS = 1000;
 const PERMISSION_TIMEOUT_MS = 7000;
 const IDLE_TIMEOUT_MS = 10000; // 10s with no file changes → waiting
+const BORED_ACTIVITY_MS = 10 * 60 * 1000; // 10 minutes
+const STALE_ACTIVITY_MS = 60 * 60 * 1000; // 60 minutes
 const PERMISSION_EXEMPT_TOOLS = new Set(['Agent', 'Task', 'AskUserQuestion', 'Skill']);
+
+function isIdleState(activity: AgentSession['activity']): boolean {
+  return activity === 'waiting' || activity === 'bored' || activity === 'stale';
+}
+
+function applyIdleTransitions(session: AgentSession, ageMs: number): boolean {
+  if (ageMs > STALE_ACTIVITY_MS && session.activity !== 'stale') {
+    session.activity = 'stale';
+    session.statusText = 'Inactive';
+    return true;
+  }
+  if (ageMs > BORED_ACTIVITY_MS && session.activity === 'waiting') {
+    session.activity = 'bored';
+    session.statusText = 'Inactive';
+    return true;
+  }
+  if (ageMs > IDLE_TIMEOUT_MS && canIdleTimeout(session)) {
+    session.activity = 'waiting';
+    session.statusText = 'Waiting for input';
+    session.hadToolsInTurn = false;
+    session.respondedAt = 0;
+    return true;
+  }
+  return false;
+}
 
 export function createSession(discovered: DiscoveredSession): AgentSession {
   return {
@@ -83,8 +110,7 @@ export function startWatching(
     if (
       (session.activeToolIds.size > 0 || session.pendingSubagentToolIds.size > 0) &&
       session.activity !== 'permission' &&
-      session.activity !== 'waiting' &&
-      session.activity !== 'stale'
+      !isIdleState(session.activity)
     ) {
       const now = Date.now();
       let needsPermission = false;
@@ -116,31 +142,18 @@ export function startWatching(
       }
     }
 
-    // Idle timeout: transition to waiting when the JSONL file stops updating.
-    // - Tool states (reading, editing, etc.) with no active tools: 10s
-    // - 'active' with respondedAt set (text record seen): 10s
-    //   (respondedAt distinguishes "Responding..." from "Starting...")
-    // - 'active' without respondedAt / 'thinking': no timeout (model is
-    //   mid-generation, JSONL won't update until response is complete)
-    if (
-      !changed &&
-      session.activity !== 'waiting' &&
-      session.activity !== 'stale' &&
-      session.activity !== 'permission'
-    ) {
-      if (canIdleTimeout(session)) {
-        try {
-          const stat = fs.statSync(session.jsonlFile);
-          if (Date.now() - stat.mtimeMs > IDLE_TIMEOUT_MS) {
-            session.activity = 'waiting';
-            session.statusText = 'Waiting for input';
-            session.hadToolsInTurn = false;
-            session.respondedAt = 0;
-            changed = true;
-          }
-        } catch {
-          // ignore
+    // Idle transitions: active → waiting (10s) → bored (10m) → stale (60m)
+    // 'active' without respondedAt / 'thinking': no timeout (model is
+    // mid-generation, JSONL won't update until response is complete)
+    if (!changed && session.activity !== 'permission') {
+      try {
+        const stat = fs.statSync(session.jsonlFile);
+        const age = Date.now() - stat.mtimeMs;
+        if (applyIdleTransitions(session, age)) {
+          changed = true;
         }
+      } catch {
+        // ignore
       }
     }
 
@@ -151,8 +164,6 @@ export function startWatching(
 
   return () => clearInterval(interval);
 }
-
-const STALE_ACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Whether the session's current state can transition to 'waiting' via idle timeout.
@@ -177,13 +188,7 @@ function readFullFile(session: AgentSession): void {
 
     const stat = fs.statSync(session.jsonlFile);
     const age = Date.now() - stat.mtimeMs;
-    if (age > STALE_ACTIVITY_MS) {
-      session.activity = 'stale';
-      session.statusText = 'Inactive';
-    } else if (age > IDLE_TIMEOUT_MS && canIdleTimeout(session)) {
-      session.activity = 'waiting';
-      session.statusText = 'Waiting for input';
-    }
+    applyIdleTransitions(session, age);
 
     session.fileOffset = stat.size;
   } catch {

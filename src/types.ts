@@ -1,5 +1,6 @@
 export type AgentActivity =
   | 'waiting'
+  | 'bored'
   | 'stale'
   | 'active'
   | 'reading'
