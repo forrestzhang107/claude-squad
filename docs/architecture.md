@@ -48,16 +48,15 @@ The parser handles these record types from Claude Code transcripts:
 | `type: "assistant"`, content has `text` only | -- | Responding state (if no tools in turn) |
 | `type: "user"`, content has `tool_result` | `tool_use_id` | Tool completion, subagent tracking |
 | `type: "user"`, content is text/text blocks | text content | Task summary (if 20+ chars) |
-| `type: "system"`, `subtype: "turn_duration"` | -- | Turn ended, reset to waiting |
+| `type: "system"`, `subtype: "turn_duration"` or `"stop_hook_summary"` | -- | Turn ended, reset to waiting |
 | `type: "progress"`, `data.type: "bash_progress"` | -- | Reset permission timer |
 | `type: "progress"`, `data.type: "mcp_progress"` | -- | Reset permission timer |
 
 ## Timeout Heuristics
 
 - **Permission detection (7s)**: If a tool_use has been active 7+ seconds with no progress events or tool_result, assume waiting for user approval
-- **Idle detection (10s)**: If JSONL file hasn't been modified for 10s and no active tools, transition to "Waiting for input"
-- **Bored detection (10min)**: If JSONL file hasn't been modified for 10 minutes, transition from "Waiting" to "Inactive" (bored)
-- **Stale detection (60min)**: If JSONL file hasn't been modified for 60 minutes, transition to "Inactive" (stale)
+- **Idle detection (10s)**: If JSONL file hasn't been modified for 10s and session is in a timeout-eligible state (e.g. "Responding..."), transition to "Waiting for input"
+- **Inactive detection (60min)**: If JSONL file hasn't been modified for 60 minutes, transition to "Inactive"
 
 ## Working Directory Detection
 

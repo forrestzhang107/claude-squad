@@ -5,22 +5,16 @@ import {processLine} from './parser.js';
 const POLL_INTERVAL_MS = 1000;
 const PERMISSION_TIMEOUT_MS = 7000;
 const IDLE_TIMEOUT_MS = 10000; // 10s with no file changes → waiting
-const BORED_ACTIVITY_MS = 10 * 60 * 1000; // 10 minutes
-const STALE_ACTIVITY_MS = 60 * 60 * 1000; // 60 minutes
+const INACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 60m with no file changes → inactive
 const PERMISSION_EXEMPT_TOOLS = new Set(['Agent', 'Task', 'AskUserQuestion', 'Skill']);
 
-function isIdleState(activity: AgentSession['activity']): boolean {
-  return activity === 'waiting' || activity === 'bored' || activity === 'stale';
+function isWaitingState(activity: AgentSession['activity']): boolean {
+  return activity === 'waiting' || activity === 'inactive';
 }
 
 function applyIdleTransitions(session: AgentSession, ageMs: number): boolean {
-  if (ageMs > STALE_ACTIVITY_MS && session.activity !== 'stale') {
-    session.activity = 'stale';
-    session.statusText = 'Inactive';
-    return true;
-  }
-  if (ageMs > BORED_ACTIVITY_MS && session.activity === 'waiting') {
-    session.activity = 'bored';
+  if (ageMs > INACTIVE_TIMEOUT_MS && session.activity !== 'inactive') {
+    session.activity = 'inactive';
     session.statusText = 'Inactive';
     return true;
   }
@@ -32,6 +26,18 @@ function applyIdleTransitions(session: AgentSession, ageMs: number): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Whether the session's current state can transition to 'waiting' via idle timeout.
+ * 'active' with respondedAt > 0 ("Responding...") can timeout, but 'active' with
+ * respondedAt === 0 ("Starting...") and 'thinking' cannot -- the model is mid-generation
+ * and the JSONL won't update until the response is complete.
+ */
+function canIdleTimeout(session: AgentSession): boolean {
+  if (isWaitingState(session.activity)) return false;
+  if (session.activity === 'active') return session.respondedAt > 0;
+  return session.activity !== 'thinking' && session.activeToolIds.size === 0;
 }
 
 export function createSession(discovered: DiscoveredSession): AgentSession {
@@ -110,7 +116,7 @@ export function startWatching(
     if (
       (session.activeToolIds.size > 0 || session.pendingSubagentToolIds.size > 0) &&
       session.activity !== 'permission' &&
-      !isIdleState(session.activity)
+      !isWaitingState(session.activity)
     ) {
       const now = Date.now();
       let needsPermission = false;
@@ -142,16 +148,12 @@ export function startWatching(
       }
     }
 
-    // Idle transitions: active → waiting (10s) → bored (10m) → stale (60m)
-    // 'active' without respondedAt / 'thinking': no timeout (model is
-    // mid-generation, JSONL won't update until response is complete)
+    // Idle transitions: active → waiting (10s) → inactive (60m)
     if (!changed && session.activity !== 'permission') {
       try {
         const stat = fs.statSync(session.jsonlFile);
         const age = Date.now() - stat.mtimeMs;
-        if (applyIdleTransitions(session, age)) {
-          changed = true;
-        }
+        changed = applyIdleTransitions(session, age);
       } catch {
         // ignore
       }
@@ -163,18 +165,6 @@ export function startWatching(
   }, POLL_INTERVAL_MS);
 
   return () => clearInterval(interval);
-}
-
-/**
- * Whether the session's current state can transition to 'waiting' via idle timeout.
- * 'active' with respondedAt > 0 ("Responding...") can timeout, but 'active' with
- * respondedAt === 0 ("Starting...") and 'thinking' cannot -- the model is mid-generation
- * and the JSONL won't update until the response is complete.
- */
-function canIdleTimeout(session: AgentSession): boolean {
-  if (isIdleState(session.activity)) return false;
-  if (session.activity === 'active') return session.respondedAt > 0;
-  return session.activity !== 'thinking' && session.activeToolIds.size === 0;
 }
 
 function readFullFile(session: AgentSession): void {

@@ -337,7 +337,7 @@ export function processLine(session: AgentSession, line: string): boolean {
       }
     } else if (
       record.type === 'system' &&
-      record.subtype === 'turn_duration'
+      (record.subtype === 'turn_duration' || record.subtype === 'stop_hook_summary')
     ) {
       session.activity = 'waiting';
       session.statusText = 'Waiting for input';

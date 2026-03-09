@@ -4,16 +4,15 @@
 
 | Activity | Face | Color | Label | Triggered By |
 |----------|------|-------|-------|-------------|
-| `waiting` | `(·‿·)` | white | Waiting | Turn end (see below), interrupt, or idle timeout |
-| `bored` | `(._.)` | gray | Inactive | JSONL file unmodified for 10–60 minutes |
-| `stale` | `(-_-)zzZ` | gray | Inactive | JSONL file unmodified for 60+ minutes |
+| `waiting` | `(·‿·)` / `(._.)` | white | Waiting | Turn end (see below), interrupt, or idle timeout. After 10 min, art switches to `(._.)` (visual only). |
+| `inactive` | `(-_-)zzZ` | gray | Inactive | JSONL file unmodified for 60+ minutes |
 | `active` | `(^_^)♪` | cyan | Working | New user prompt ("Starting...") or assistant text block ("Responding...") |
 | `thinking` | `(o.o)...` | cyan | Thinking | Assistant `thinking` block (no tool_use in same message) |
 | `reading` | `(o_o) ` | cyan | Reading | `Read` tool use |
 | `editing` | `(*_*)~` | yellow | Editing | `Edit` or `Write` tool use |
-| `running` | `(^_^)/` | green | Running | `Bash`, `Agent`, or `Task` tool use |
+| `running` | `(·_·)>_` | green | Running | `Bash`, `Agent`, or `Task` tool use |
 | `searching` | `(o_o)?` | magenta | Searching | `Glob`, `Grep`, `WebFetch`, `WebSearch` tool use |
-| `permission` | `(o_o)!` | red | Blocked | 7s timeout on pending tool with no progress events |
+| `permission` | `(>_<)!` | red | Blocked | 7s timeout on pending tool with no progress events |
 
 ## JSONL Streaming
 
@@ -45,20 +44,15 @@ New user prompt  -->  active ("Starting...", respondedAt=0)
       activity]   ("Thinking...")  ("Responding...", respondedAt=now)
          |              |           |
          v              v           v
-    tool_result    next record   turn_duration / idle timeout (10s)
+    tool_result    next record   turn_duration / stop_hook_summary / idle timeout (10s)
          |                          |
          v                          v
     active ("Working...")     waiting ("Waiting for input")
     (all tools done)                |
-                              (10 min pass)
-                                    |
-                                    v
-                              bored ("Inactive")
-                                    |
                               (60 min pass)
                                     |
                                     v
-                              stale ("Inactive")
+                              inactive ("Inactive")
 ```
 
 ## Turn End Detection
@@ -68,6 +62,7 @@ A turn ends (→ `waiting`) via one of these signals:
 | Signal | Source | Timing |
 |--------|--------|--------|
 | `turn_duration` | System record in JSONL | Immediate (when present) |
+| `stop_hook_summary` | System record in JSONL | Immediate (when present) |
 | Idle timeout on "Responding..." | `respondedAt` set + 10s no file changes | 10 seconds |
 | `[Request interrupted by user]` | User record from Ctrl+C | Immediate |
 | `last-prompt` | Final JSONL record on clean exit | Immediate |
@@ -114,7 +109,10 @@ events, which contain the subagent's full messages:
 
 ## Inactivity Detection
 
-If the JSONL file's mtime exceeds 10 minutes (`BORED_ACTIVITY_MS`), the session
-is marked `bored`. After 60 minutes (`STALE_ACTIVITY_MS`), it transitions to
-`stale`. This handles cases where the agent is idle or the process was killed
-without writing any termination record (e.g. SIGKILL).
+If the JSONL file's mtime exceeds 60 minutes (`INACTIVE_TIMEOUT_MS`), the session
+transitions to `inactive`. This handles cases where the agent is idle or the
+process was killed without writing any termination record (e.g. SIGKILL).
+
+Note: The `waiting` state's visual art switches from `(·‿·)` to `(._.)` after
+10 minutes (`BORED_ART_MS` in `characters.ts`), but this is purely cosmetic —
+it is not a separate state.

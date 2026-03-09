@@ -59,13 +59,11 @@ Or a new user prompt:
 
 ### System Events
 
-Turn completion:
+Turn completion (either subtype signals end of turn):
 
 ```json
-{
-  "type": "system",
-  "subtype": "turn_duration"
-}
+{"type": "system", "subtype": "turn_duration"}
+{"type": "system", "subtype": "stop_hook_summary"}
 ```
 
 ### Progress Events
