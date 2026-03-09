@@ -56,7 +56,8 @@ The parser handles these record types from Claude Code transcripts:
 
 - **Permission detection (7s)**: If a tool_use has been active 7+ seconds with no progress events or tool_result, assume waiting for user approval
 - **Idle detection (10s)**: If JSONL file hasn't been modified for 10s and no active tools, transition to "Waiting for input"
-- **Stale detection (5min)**: If JSONL file hasn't been modified for 5 minutes, transition to "Inactive"
+- **Bored detection (10min)**: If JSONL file hasn't been modified for 10 minutes, transition from "Waiting" to "Inactive" (bored)
+- **Stale detection (60min)**: If JSONL file hasn't been modified for 60 minutes, transition to "Inactive" (stale)
 
 ## Working Directory Detection
 

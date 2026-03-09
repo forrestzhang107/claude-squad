@@ -172,6 +172,7 @@ export function startWatching(
  * and the JSONL won't update until the response is complete.
  */
 function canIdleTimeout(session: AgentSession): boolean {
+  if (isIdleState(session.activity)) return false;
   if (session.activity === 'active') return session.respondedAt > 0;
   return session.activity !== 'thinking' && session.activeToolIds.size === 0;
 }
