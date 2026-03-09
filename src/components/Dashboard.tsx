@@ -1,5 +1,5 @@
 import React, {useState, useEffect} from 'react';
-import {Box, Text, useInput, useApp} from 'ink';
+import {Box, Text, useInput, useApp, useStdout} from 'ink';
 import {scanSessions} from '../scanner.js';
 import {createSession, startWatching} from '../watcher.js';
 import type {AgentSession} from '../types.js';
@@ -16,25 +16,33 @@ const CARD_WIDTH = 40;
 
 export function Dashboard({projectFilter, showAll}: DashboardProps) {
   const {exit} = useApp();
+  const {stdout} = useStdout();
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [tick, setTick] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  // padding=1 adds 1 char on each side, gap=1 adds 1 char between cards
+  const cols = Math.max(1, Math.floor(((stdout?.columns ?? 80) - 2) / (CARD_WIDTH + 1)));
+
+  const lastIndex = sessions.length - 1;
+  const clamp = (n: number): number => Math.max(0, Math.min(lastIndex, n));
+
   useEffect(() => {
-    setSelectedIndex((i) => Math.min(i, Math.max(0, sessions.length - 1)));
+    setSelectedIndex(clamp);
   }, [sessions.length]);
 
   useInput((input, key) => {
     if (input === 'q' || (input === 'c' && key.ctrl)) {
       exit();
-    }
-    if (key.leftArrow) {
-      setSelectedIndex((i) => Math.max(0, i - 1));
-    }
-    if (key.rightArrow) {
-      setSelectedIndex((i) => Math.min(sessions.length - 1, i + 1));
-    }
-    if (key.return) {
+    } else if (key.leftArrow) {
+      setSelectedIndex((i) => clamp(i - 1));
+    } else if (key.rightArrow) {
+      setSelectedIndex((i) => clamp(i + 1));
+    } else if (key.upArrow) {
+      setSelectedIndex((i) => clamp(i - cols));
+    } else if (key.downArrow) {
+      setSelectedIndex((i) => clamp(i + cols));
+    } else if (key.return) {
       const session = sessions[selectedIndex];
       if (session?.pid) {
         switchToTerminalTab(session.pid);
@@ -107,7 +115,7 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
       <Box marginBottom={1}>
         <Text bold color="cyan">claude-squad </Text>
         <Text dimColor>
-          {sessions.length} session{sessions.length !== 1 ? 's' : ''} | ←→
+          {sessions.length} session{sessions.length !== 1 ? 's' : ''} | ←→↑↓
           navigate | enter: switch terminal | q: quit
         </Text>
       </Box>
