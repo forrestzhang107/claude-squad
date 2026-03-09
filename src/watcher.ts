@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import type {AgentSession, DiscoveredSession} from './types.js';
-import {processLine} from './parser.js';
+import {processLine, resetToolState} from './parser.js';
 
 const POLL_INTERVAL_MS = 1000;
 const PERMISSION_TIMEOUT_MS = 7000;
@@ -14,6 +14,13 @@ export function applyInactiveTransition(session: AgentSession, ageMs: number): b
     return true;
   }
   return false;
+}
+
+/** Reset file I/O and tool tracking state (e.g. when JSONL file changes after /clear). */
+export function resetFileState(session: AgentSession): void {
+  session.fileOffset = 0;
+  session.lineBuffer = '';
+  resetToolState(session);
 }
 
 export function createSession(discovered: DiscoveredSession): AgentSession {
@@ -42,7 +49,6 @@ export function createSession(discovered: DiscoveredSession): AgentSession {
     subagentToolTimestamps: new Map(),
     taskSummary: '',
     workingDirectory: '',
-    repoName: '',
     recentPaths: [],
     contextTokens: 0,
     contextMaxTokens: 200000,

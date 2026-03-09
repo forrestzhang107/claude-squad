@@ -5,37 +5,62 @@ import {execSync} from 'node:child_process';
 import type {DiscoveredSession} from './types.js';
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
-const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
-const MAX_MATCH_DELTA_MS = 60 * 1000; // 60s max delta for process-to-session matching
 
 
-interface ClaudeProcess {
+export interface ClaudeProcess {
   pid: number;
   startTime: number;
+  tty?: string;
+  projectDir?: string; // encoded CWD, e.g. "-Users-forrest-Repos-telvana"
 }
 
-/** Find all running claude processes with their start times. */
+/** Find all running claude processes with their start times, TTYs, and CWDs. */
 function getActiveClaudeProcesses(): ClaudeProcess[] {
   const processes: ClaudeProcess[] = [];
   try {
-    const pids = execSync("ps -eo pid,comm | grep -w 'claude$' | awk '{print $1}'", {
+    // Single ps call: get pid, lstart, tty, and comm in one shot.
+    // comm is last so grep anchors to it.
+    const lines = execSync("ps -eo pid,lstart,tty,comm | grep -w 'claude$'", {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim().split('\n').filter(Boolean);
 
-    for (const pidStr of pids) {
-      const pid = parseInt(pidStr, 10);
+    const pids: number[] = [];
+    for (const line of lines) {
+      // Format: "  74876 Sun Mar  8 07:05:50 2026     ttys001  claude"
+      const parts = line.trim().split(/\s+/);
+      const pid = parseInt(parts[0], 10);
+      // lstart is 5 tokens (e.g. "Sun Mar  8 07:05:50 2026"), tty is next, comm is last
+      const lstartStr = parts.slice(1, 6).join(' ');
+      const ttyPart = parts[6];
+      const startTime = new Date(lstartStr).getTime();
+      const tty = ttyPart && ttyPart !== '??' && /^ttys\d+$/.test(ttyPart) ? `/dev/${ttyPart}` : undefined;
+      if (startTime) {
+        processes.push({pid, startTime, tty});
+        pids.push(pid);
+      }
+    }
+
+    // Single lsof call for all CWDs at once
+    if (pids.length > 0) {
       try {
-        const lstart = execSync(`ps -o lstart= -p ${pid}`, {
+        const lsofOutput = execSync(`lsof -a -d cwd -Fn -p ${pids.join(',')}`, {
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim();
-        if (lstart) {
-          const startTime = new Date(lstart).getTime();
-          if (startTime) processes.push({pid, startTime});
+        });
+        // Parse lsof output: "p<pid>\nfcwd\nn<path>\n" repeating
+        let currentPid = 0;
+        for (const lsofLine of lsofOutput.split('\n')) {
+          if (lsofLine.startsWith('p')) {
+            currentPid = parseInt(lsofLine.slice(1), 10);
+          } else if (lsofLine.startsWith('n') && currentPid) {
+            const cwd = lsofLine.slice(1);
+            const proc = processes.find((p) => p.pid === currentPid);
+            if (proc) proc.projectDir = cwd.replace(/[^a-zA-Z0-9-]/g, '-');
+          }
         }
       } catch {
-        // Process may have exited
+        // lsof failed — proceed without CWD info
       }
     }
   } catch {
@@ -78,149 +103,156 @@ export function extractProjectName(dirName: string): string {
 }
 
 /**
- * Find all SessionStart hook timestamps in a JSONL file.
- * A file can have multiple SessionStarts when sessions are resumed via --resume.
- * Each SessionStart fires within seconds of a process starting, so matching
- * these against process start times identifies which process is using this file.
- * Falls back to file birth time if no hooks are found.
- *
- * Results are cached by file path + size since SessionStart hooks are immutable
- * (they're only appended, never modified). The cache is invalidated when the
- * file grows, at which point only the new bytes are scanned.
+ * Extract assistant response snippets from Terminal.app history text.
+ * Responses are lines starting with ⏺. We take the first 30 characters
+ * as a fuzzy-match snippet (the terminal strips markdown and wraps lines,
+ * but the first ~30 chars are reliable for matching against JSONL content).
+ * Filters out tool-use lines which are UI-rendered and don't appear in JSONL.
  */
-interface SessionStartCache {
-  size: number;
-  timestamps: number[];
-}
+// Matches tool invocations: "ToolName(args)", "prefix:ToolName(args)",
+// "Read path", "Read N files", "Searched for N patterns", etc.
+const TOOL_LINE_RE = /^[\w-]+(?::[\w-]+)?\(|^Read \S|^Searched for \d+/;
+const SNIPPET_LENGTH = 30;
+const MAX_SNIPPETS_TO_TRY = 5;
 
-const sessionStartCache = new Map<string, SessionStartCache>();
-
-function getSessionStartTimes(jsonlFile: string, fileBirthMs: number): number[] {
-  let fileSize: number;
-  try {
-    fileSize = fs.statSync(jsonlFile).size;
-  } catch {
-    return [fileBirthMs];
-  }
-
-  const cached = sessionStartCache.get(jsonlFile);
-  if (cached && cached.size === fileSize) {
-    return cached.timestamps.length > 0 ? cached.timestamps : [fileBirthMs];
-  }
-
-  // Read only the new bytes if we have a partial cache
-  const offset = cached ? cached.size : 0;
-  const timestamps = cached ? [...cached.timestamps] : [];
-
-  try {
-    const readSize = fileSize - offset;
-    if (readSize <= 0) {
-      return timestamps.length > 0 ? timestamps : [fileBirthMs];
+export function extractAssistantResponses(terminalText: string): string[] {
+  if (!terminalText) return [];
+  const responses: string[] = [];
+  for (const line of terminalText.split('\n')) {
+    if (line.startsWith('⏺ ')) {
+      const response = line.slice(2).trim();
+      if (!response) continue;
+      if (TOOL_LINE_RE.test(response)) continue;
+      if (response.endsWith('(ctrl+o to expand)')) continue;
+      const snippet = response.slice(0, SNIPPET_LENGTH);
+      if (snippet.length >= 10) responses.push(snippet);
     }
-
-    const buf = Buffer.alloc(readSize);
-    const fd = fs.openSync(jsonlFile, 'r');
-    try {
-      fs.readSync(fd, buf, 0, readSize, offset);
-    } finally {
-      fs.closeSync(fd);
-    }
-
-    for (const line of buf.toString('utf-8').split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line);
-        if (
-          record.type === 'progress' &&
-          record.data?.type === 'hook_progress' &&
-          record.data?.hookEvent === 'SessionStart'
-        ) {
-          const ts = new Date(record.timestamp).getTime();
-          if (ts > 0) timestamps.push(ts);
-        }
-      } catch {
-        // Skip malformed lines
-      }
-    }
-  } catch {
-    // File read error
   }
-
-  sessionStartCache.set(jsonlFile, {size: fileSize, timestamps});
-  return timestamps.length > 0 ? timestamps : [fileBirthMs];
+  return responses;
 }
 
 /**
- * Match sessions to processes by correlating SessionStart hook timestamps
- * with process start times. A JSONL file can have multiple SessionStart hooks
- * (from --resume), so we consider ALL of them and pick the best pairing.
+ * Match assistant response snippets (from terminal history) against JSONL file
+ * tails to find which session they belong to. Returns the sessionId of the best
+ * match, or null if no match.
  *
- * Uses greedy closest-match: sorts all (session, timestamp, process) triples
- * by time delta, then greedily assigns the best unused pair.
+ * Reads the tail of each JSONL file and counts how many snippets appear in it.
+ * Returns the first session that matches all snippets, or the session with the
+ * most matches if no full match is found.
  */
-function matchProcesses(
+export function matchSessionBySnippets(
+  snippets: string[],
   sessions: DiscoveredSession[],
-  processes: ClaudeProcess[],
-): void {
-  if (sessions.length === 0 || processes.length === 0) return;
+): string | null {
+  if (snippets.length === 0 || sessions.length === 0) return null;
 
-  // Collect all SessionStart timestamps for each session
-  const sessionTimesMap = new Map<string, number[]>();
-  for (const s of sessions) {
-    sessionTimesMap.set(s.sessionId, getSessionStartTimes(s.jsonlFile, s.createdAt));
-  }
+  const TAIL_BYTES = 32 * 1024; // Read last 32KB to reliably capture the latest assistant text
 
-  // Build candidate pairs using ALL timestamps per session
-  const pairs: Array<{session: DiscoveredSession; proc: ClaudeProcess; delta: number}> = [];
-  for (const s of sessions) {
-    const times = sessionTimesMap.get(s.sessionId)!;
-    for (const proc of processes) {
-      // Use the timestamp closest to this process's start time
-      let bestDelta = Infinity;
-      for (const t of times) {
-        const d = Math.abs(t - proc.startTime);
-        if (d < bestDelta) bestDelta = d;
+  let bestSession: string | null = null;
+  let bestCount = 0;
+
+  for (const session of sessions) {
+    let tail: string;
+    try {
+      const stat = fs.statSync(session.jsonlFile);
+      const size = stat.size;
+      const readStart = Math.max(0, size - TAIL_BYTES);
+      const readLen = size - readStart;
+      const buf = Buffer.alloc(readLen);
+      const fd = fs.openSync(session.jsonlFile, 'r');
+      try {
+        fs.readSync(fd, buf, 0, readLen, readStart);
+      } finally {
+        fs.closeSync(fd);
       }
-      pairs.push({session: s, proc, delta: bestDelta});
+      tail = buf.toString('utf-8');
+    } catch {
+      continue;
+    }
+
+    let matchCount = 0;
+    for (const snippet of snippets) {
+      if (tail.includes(snippet)) {
+        matchCount++;
+      }
+    }
+
+    if (matchCount > bestCount) {
+      bestCount = matchCount;
+      bestSession = session.sessionId;
+      if (bestCount === snippets.length) break;
+    } else if (matchCount === bestCount && matchCount > 0) {
+      bestSession = null; // tie — ambiguous
     }
   }
-  pairs.sort((a, b) => a.delta - b.delta);
 
-  // Greedy closest-match (reject pairs with delta > 60s to avoid spurious matches)
-  const usedSessions = new Set<string>();
-  const usedPids = new Set<number>();
-  for (const {session, proc, delta} of pairs) {
-    if (delta > MAX_MATCH_DELTA_MS) break; // sorted by delta, all remaining are worse
-    if (usedSessions.has(session.sessionId) || usedPids.has(proc.pid)) continue;
-    session.pid = proc.pid;
-    session.processStartedAt = proc.startTime;
-    usedSessions.add(session.sessionId);
-    usedPids.add(proc.pid);
-  }
+  return bestSession;
 }
 
-export function scanSessions(options: {
-  showAll?: boolean;
-  projectFilter?: string;
-}): DiscoveredSession[] {
-  const {showAll, projectFilter} = options;
-  const now = Date.now();
+/**
+ * Read terminal history for specific TTYs from Terminal.app in a single AppleScript call.
+ * Only reads tabs matching the given TTYs to minimize data transfer.
+ */
+function getTerminalHistories(ttys: string[]): Map<string, string> {
+  const histories = new Map<string, string>();
+  if (ttys.length === 0) return histories;
+
+  try {
+    const SEPARATOR = '___TTY_SEP___';
+    const ttySet = ttys.map((t) => `"${t}"`).join(', ');
+    const script = `
+      tell application "Terminal"
+        set ttyList to {${ttySet}}
+        set output to ""
+        repeat with w in windows
+          repeat with t in tabs of w
+            set ttyName to tty of t
+            if ttyList contains ttyName then
+              set output to output & ttyName & "${SEPARATOR}" & (history of t) & "${SEPARATOR}${SEPARATOR}"
+            end if
+          end repeat
+        end repeat
+        return output
+      end tell
+    `;
+    const raw = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 10000,
+      maxBuffer: 10 * 1024 * 1024, // 10MB — terminal histories can be large
+    });
+
+    for (const chunk of raw.split(`${SEPARATOR}${SEPARATOR}`)) {
+      const sepIdx = chunk.indexOf(SEPARATOR);
+      if (sepIdx === -1) continue;
+      const tty = chunk.slice(0, sepIdx).trim();
+      const history = chunk.slice(sepIdx + SEPARATOR.length);
+      if (tty) histories.set(tty, history);
+    }
+  } catch {
+    // Terminal.app not running or AppleScript failed
+  }
+
+  return histories;
+}
+
+export interface ScanResult {
+  sessions: DiscoveredSession[];
+  activePids: Set<number>;
+}
+
+export function scanSessions(): ScanResult {
   const sessions: DiscoveredSession[] = [];
 
   let projectDirs: string[];
   try {
     projectDirs = fs.readdirSync(CLAUDE_PROJECTS_DIR);
   } catch {
-    return [];
+    return {sessions: [], activePids: new Set()};
   }
 
   for (const dirName of projectDirs) {
     const projectName = extractProjectName(dirName);
-
-    if (projectFilter && !projectName.includes(projectFilter)) {
-      continue;
-    }
-
     const dirPath = path.join(CLAUDE_PROJECTS_DIR, dirName);
     let stat: fs.Stats;
     try {
@@ -263,38 +295,58 @@ export function scanSessions(options: {
 
   const processes = getActiveClaudeProcesses();
 
-  // Match against all sessions first — a long-idle process may have a stale
-  // file that would be excluded by the 24h filter. Matching first ensures
-  // active processes always find their session.
-  matchProcesses(sessions, processes);
+  // TTY-based matching: read terminal history via AppleScript and match
+  // assistant response snippets against JSONL file tails. This handles
+  // /clear correctly since the terminal always shows the current session.
+  const ttyProcesses = processes.filter((p) => p.tty);
+  const ttys = ttyProcesses.map((p) => p.tty!);
+  const terminalHistories = ttyProcesses.length > 0 ? getTerminalHistories(ttys) : new Map();
 
-  // Now filter: keep matched sessions (regardless of age) and recent unmatched ones
-  const filtered = sessions.filter((s) => {
-    if (showAll) return true;
-    if (s.pid > 0) return true;
-    return now - s.modifiedAt <= STALE_THRESHOLD_MS;
-  });
-
-  if (showAll) {
-    // Deduplicate to one per project (prefer matched sessions, then most recent)
-    filtered.sort((a, b) => {
-      if (a.pid && !b.pid) return -1;
-      if (!a.pid && b.pid) return 1;
-      return b.modifiedAt - a.modifiedAt;
-    });
-    const seen = new Set<string>();
-    const result = filtered.filter((s) => {
-      if (seen.has(s.projectDir)) return false;
-      seen.add(s.projectDir);
-      return true;
-    });
-    result.sort((a, b) => (a.processStartedAt || Infinity) - (b.processStartedAt || Infinity));
-    return result;
+  // Pre-compute sessions by project directory, sorted by most recently modified
+  const sessionsByDir = new Map<string, DiscoveredSession[]>();
+  for (const s of sessions) {
+    const existing = sessionsByDir.get(s.projectDir);
+    if (existing) {
+      existing.push(s);
+    } else {
+      sessionsByDir.set(s.projectDir, [s]);
+    }
+  }
+  for (const group of sessionsByDir.values()) {
+    group.sort((a, b) => b.modifiedAt - a.modifiedAt);
   }
 
-  // Default: return only sessions matched to a running process
-  const result = filtered.filter((s) => s.pid > 0);
-  result.sort((a, b) => a.processStartedAt - b.processStartedAt);
+  for (const proc of ttyProcesses) {
+    const history = terminalHistories.get(proc.tty!);
+    if (!history) continue;
 
-  return result;
+    const responses = extractAssistantResponses(history);
+    if (responses.length === 0) continue;
+
+    const candidates = (proc.projectDir && sessionsByDir.get(proc.projectDir)) || sessions;
+    const unclaimed = candidates.filter((s) => s.pid === 0);
+
+    // Try recent snippets in reverse order. The terminal may contain responses
+    // from previous sessions (before /clear), so the latest snippet might match
+    // an old file. Walk backwards to find one that matches a current file.
+    const recentSnippets = responses.slice(-MAX_SNIPPETS_TO_TRY).reverse();
+    for (const snippet of recentSnippets) {
+      const matchedSessionId = matchSessionBySnippets([snippet], unclaimed);
+      if (!matchedSessionId) continue;
+
+      const targetSession = sessions.find((s) => s.sessionId === matchedSessionId);
+      if (!targetSession) continue;
+
+      targetSession.pid = proc.pid;
+      targetSession.processStartedAt = proc.startTime;
+      break;
+    }
+  }
+
+  // Return matched sessions + all active PIDs (for Dashboard to detect exited processes)
+  const matched = sessions.filter((s) => s.pid > 0);
+  matched.sort((a, b) => a.processStartedAt - b.processStartedAt);
+  const activePids = new Set(processes.map((p) => p.pid));
+
+  return {sessions: matched, activePids};
 }

@@ -33,19 +33,17 @@
 1. Read dirs from `~/.claude/projects/`
 2. Resolve encoded dir names back to filesystem paths (e.g. `-Users-forrest-Repos-telvana-telvana-api` -> `/Users/forrest/Repos/telvana/telvana-api`)
 3. Find `.jsonl` files in each dir
-4. Use `ps -eo pid,comm` to find running `claude` processes, then `ps -o lstart=` for start times
-5. Match sessions to processes by correlating process start times with `SessionStart` hook timestamps in JSONL files (greedy closest-match algorithm)
-6. Default: show only sessions matched to a running process. `--all`: show one session per project (prefer matched, then most recent)
+4. Use `ps` to find running `claude` processes with TTYs, then `lsof` for CWDs
+5. Match sessions to processes via TTY-based matching (AppleScript reads terminal history, snippets matched against JSONL tails)
+6. Only sessions matched to a running process are shown
 
 ### Process Matching Details
 
-Directory-based matching (CWD via `lsof`) is **not used** — multiple sessions can share a CWD (e.g. worktrees), making it unreliable. Instead, matching is purely timestamp-based:
-
-- Each JSONL file can contain multiple `SessionStart` hook events (from `--resume` operations)
-- For each (session, process) pair, the closest `SessionStart` timestamp to the process start time is used
-- All pairs are sorted by time delta and greedily assigned (closest match first, no reuse)
-- `SessionStart` timestamps are cached by file path + size (incremental reads for growing files)
-- Falls back to file birth time if no `SessionStart` hooks are found
+**TTY-based matching** — reads Terminal.app tab contents via AppleScript to match processes to JSONL files:
+- Uses `lsof` to get process CWDs, filtering candidate JSONL files to the matching project directory
+- Extracts 30-char snippets from assistant response lines (`⏺` prefix) in the terminal
+- Matches the latest snippet against the tail (32KB) of candidate JSONL files
+- The Dashboard preserves matches across scan cycles — a match is never dropped, only updated
 
 ### Stale Session Filtering
 
@@ -68,7 +66,6 @@ The parser handles these record types from Claude Code transcripts:
 | `type: "progress"`, `data.type: "agent_progress"` | nested `message` | Subagent tool_use/tool_result tracking |
 | `type: "system"`, `subtype: "compact_boundary"` | `compactMetadata` | Context compaction (override `last-prompt` waiting state) |
 | `type: "progress"`, `data.type: "tool_permission_request"` | -- | Explicit permission state |
-| `type: "progress"`, `data.type: "hook_progress"`, `hookEvent: "SessionStart"` | `timestamp` | Process-to-session matching (in scanner) |
 | `type: "last-prompt"` | -- | Session ended cleanly |
 
 ## Timeout Heuristics

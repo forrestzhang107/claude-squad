@@ -42,7 +42,7 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
       paddingX={1}
     >
       <Text bold wrap="truncate">
-        {session.repoName || session.projectName}
+        {session.projectName}
         {session.gitBranch ? (
           <Text dimColor> ({session.gitBranch})</Text>
         ) : null}

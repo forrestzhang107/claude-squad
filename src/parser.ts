@@ -20,42 +20,6 @@ export function stripSystemTags(text: string): string {
     .trim();
 }
 
-function findGitRoot(dir: string): string {
-  let current = dir;
-  while (current !== '/') {
-    try {
-      const gitPath = path.join(current, '.git');
-      if (fs.existsSync(gitPath)) return current;
-    } catch {
-      // ignore
-    }
-    current = path.dirname(current);
-  }
-  return '';
-}
-
-function parseRepoName(gitRoot: string): string {
-  try {
-    let gitDir = path.join(gitRoot, '.git');
-    // In a worktree, .git is a file containing "gitdir: <path>"
-    const stat = fs.statSync(gitDir);
-    if (stat.isFile()) {
-      const content = fs.readFileSync(gitDir, 'utf-8').trim();
-      const match = content.match(/^gitdir:\s*(.+)/);
-      if (match) {
-        gitDir = path.resolve(gitRoot, match[1]);
-      }
-    }
-    const configPath = path.join(gitDir, 'config');
-    const config = fs.readFileSync(configPath, 'utf-8');
-    const urlMatch = config.match(/url\s*=\s*.*[/:]([^/]+\/[^/]+?)(?:\.git)?\s*$/m);
-    if (urlMatch) return urlMatch[1].split('/').pop() || urlMatch[1]; // e.g. "claude-squad"
-  } catch {
-    // ignore
-  }
-  return '';
-}
-
 function extractDir(filePath: unknown): string {
   if (typeof filePath !== 'string' || !filePath.startsWith('/')) return '';
   return path.dirname(filePath);
@@ -247,10 +211,6 @@ export function processLine(session: AgentSession, line: string): boolean {
             const detected = detectWorkingDirectory(session.recentPaths);
             if (detected && detected !== session.workingDirectory) {
               session.workingDirectory = detected;
-              const gitRoot = findGitRoot(detected);
-              if (gitRoot) {
-                session.repoName = parseRepoName(gitRoot) || path.basename(gitRoot);
-              }
               changed = true;
             }
           }

@@ -41,14 +41,6 @@ claude-squad
 
 That's it. It auto-discovers every running Claude Code session and starts showing live status. Press `q` to quit.
 
-```bash
-# Filter to a specific project
-claude-squad --project telvana
-
-# Include older/inactive sessions
-claude-squad --all
-```
-
 ## What You Get
 
 Each agent card shows:

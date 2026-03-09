@@ -40,7 +40,6 @@ export interface AgentSession {
   subagentToolTimestamps: Map<string, number>;
   taskSummary: string;
   workingDirectory: string;
-  repoName: string;
   recentPaths: string[];
   contextTokens: number;
   contextMaxTokens: number;
