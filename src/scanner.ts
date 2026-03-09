@@ -6,24 +6,18 @@ import type {DiscoveredSession} from './types.js';
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_MATCH_DELTA_MS = 60 * 1000; // 60s max delta for process-to-session matching
 
-/** Encode a filesystem path the same way Claude does for project directory names. */
-function pathToDirName(fsPath: string): string {
-  return fsPath.replace(/[^a-zA-Z0-9-]/g, '-');
+
+interface ClaudeProcess {
+  pid: number;
+  startTime: number;
 }
 
-/**
- * Returns a map of session-id -> PID by parsing --resume args from claude processes,
- * and a map of encoded project-dir-name -> count of all active claude processes.
- */
-function getActiveClaudeProcesses(): {
-  sessionPids: Map<string, number>;
-  dirPids: Map<string, number[]>;
-} {
-  const sessionPids = new Map<string, number>();
-  const dirPids = new Map<string, number[]>();
+/** Find all running claude processes with their start times. */
+function getActiveClaudeProcesses(): ClaudeProcess[] {
+  const processes: ClaudeProcess[] = [];
   try {
-    // Get all claude PIDs (bare "claude" processes, not substrings like "claude-squad")
     const pids = execSync("ps -eo pid,comm | grep -w 'claude$' | awk '{print $1}'", {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -31,32 +25,14 @@ function getActiveClaudeProcesses(): {
 
     for (const pidStr of pids) {
       const pid = parseInt(pidStr, 10);
-
-      // Check for --resume to get exact session ID mapping
       try {
-        const args = execSync(`ps -o args= -p ${pid}`, {
+        const lstart = execSync(`ps -o lstart= -p ${pid}`, {
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe'],
         }).trim();
-        const match = args.match(/--resume[=\s]+([0-9a-f-]+)/);
-        if (match) {
-          sessionPids.set(match[1], pid);
-        }
-      } catch {
-        // Process may have exited
-      }
-
-      // Resolve CWD for active-dir counting (all processes, not just --resume)
-      try {
-        const output = execSync(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null | grep '^n' | head -1`, {
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim();
-        if (output) {
-          const cwd = output.startsWith('n') ? output.slice(1) : output;
-          const dirName = pathToDirName(cwd);
-          if (!dirPids.has(dirName)) dirPids.set(dirName, []);
-          dirPids.get(dirName)!.push(pid);
+        if (lstart) {
+          const startTime = new Date(lstart).getTime();
+          if (startTime) processes.push({pid, startTime});
         }
       } catch {
         // Process may have exited
@@ -65,32 +41,7 @@ function getActiveClaudeProcesses(): {
   } catch {
     // No claude processes
   }
-  return {sessionPids, dirPids};
-}
-
-/** Check if the last record in a JSONL file is a last-prompt (session ended cleanly). */
-function isSessionEnded(jsonlFile: string): boolean {
-  try {
-    const stat = fs.statSync(jsonlFile);
-    const readSize = Math.min(stat.size, 4096);
-    const buf = Buffer.alloc(readSize);
-    const fd = fs.openSync(jsonlFile, 'r');
-    try {
-      fs.readSync(fd, buf, 0, readSize, stat.size - readSize);
-    } finally {
-      fs.closeSync(fd);
-    }
-
-    const text = buf.toString('utf-8');
-    const lines = text.split('\n').filter(Boolean);
-    const lastLine = lines[lines.length - 1];
-    if (!lastLine) return false;
-
-    const record = JSON.parse(lastLine);
-    return record.type === 'last-prompt';
-  } catch {
-    return false;
-  }
+  return processes;
 }
 
 export function extractProjectName(dirName: string): string {
@@ -126,13 +77,125 @@ export function extractProjectName(dirName: string): string {
   return buffer || path.basename(resolved);
 }
 
-/** Assign PIDs to sessions using exact session-ID matches. */
-function assignPids(sessions: DiscoveredSession[], sessionPids: Map<string, number>): void {
-  for (const s of sessions) {
-    const pid = sessionPids.get(s.sessionId);
-    if (pid !== undefined) {
-      s.pid = pid;
+/**
+ * Find all SessionStart hook timestamps in a JSONL file.
+ * A file can have multiple SessionStarts when sessions are resumed via --resume.
+ * Each SessionStart fires within seconds of a process starting, so matching
+ * these against process start times identifies which process is using this file.
+ * Falls back to file birth time if no hooks are found.
+ *
+ * Results are cached by file path + size since SessionStart hooks are immutable
+ * (they're only appended, never modified). The cache is invalidated when the
+ * file grows, at which point only the new bytes are scanned.
+ */
+interface SessionStartCache {
+  size: number;
+  timestamps: number[];
+}
+
+const sessionStartCache = new Map<string, SessionStartCache>();
+
+function getSessionStartTimes(jsonlFile: string, fileBirthMs: number): number[] {
+  let fileSize: number;
+  try {
+    fileSize = fs.statSync(jsonlFile).size;
+  } catch {
+    return [fileBirthMs];
+  }
+
+  const cached = sessionStartCache.get(jsonlFile);
+  if (cached && cached.size === fileSize) {
+    return cached.timestamps.length > 0 ? cached.timestamps : [fileBirthMs];
+  }
+
+  // Read only the new bytes if we have a partial cache
+  const offset = cached ? cached.size : 0;
+  const timestamps = cached ? [...cached.timestamps] : [];
+
+  try {
+    const readSize = fileSize - offset;
+    if (readSize <= 0) {
+      return timestamps.length > 0 ? timestamps : [fileBirthMs];
     }
+
+    const buf = Buffer.alloc(readSize);
+    const fd = fs.openSync(jsonlFile, 'r');
+    try {
+      fs.readSync(fd, buf, 0, readSize, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    for (const line of buf.toString('utf-8').split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line);
+        if (
+          record.type === 'progress' &&
+          record.data?.type === 'hook_progress' &&
+          record.data?.hookEvent === 'SessionStart'
+        ) {
+          const ts = new Date(record.timestamp).getTime();
+          if (ts > 0) timestamps.push(ts);
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+  } catch {
+    // File read error
+  }
+
+  sessionStartCache.set(jsonlFile, {size: fileSize, timestamps});
+  return timestamps.length > 0 ? timestamps : [fileBirthMs];
+}
+
+/**
+ * Match sessions to processes by correlating SessionStart hook timestamps
+ * with process start times. A JSONL file can have multiple SessionStart hooks
+ * (from --resume), so we consider ALL of them and pick the best pairing.
+ *
+ * Uses greedy closest-match: sorts all (session, timestamp, process) triples
+ * by time delta, then greedily assigns the best unused pair.
+ */
+function matchProcesses(
+  sessions: DiscoveredSession[],
+  processes: ClaudeProcess[],
+): void {
+  if (sessions.length === 0 || processes.length === 0) return;
+
+  // Collect all SessionStart timestamps for each session
+  const sessionTimesMap = new Map<string, number[]>();
+  for (const s of sessions) {
+    sessionTimesMap.set(s.sessionId, getSessionStartTimes(s.jsonlFile, s.createdAt));
+  }
+
+  // Build candidate pairs using ALL timestamps per session
+  const pairs: Array<{session: DiscoveredSession; proc: ClaudeProcess; delta: number}> = [];
+  for (const s of sessions) {
+    const times = sessionTimesMap.get(s.sessionId)!;
+    for (const proc of processes) {
+      // Use the timestamp closest to this process's start time
+      let bestDelta = Infinity;
+      for (const t of times) {
+        const d = Math.abs(t - proc.startTime);
+        if (d < bestDelta) bestDelta = d;
+      }
+      pairs.push({session: s, proc, delta: bestDelta});
+    }
+  }
+  pairs.sort((a, b) => a.delta - b.delta);
+
+  // Greedy closest-match (reject pairs with delta > 60s to avoid spurious matches)
+  const usedSessions = new Set<string>();
+  const usedPids = new Set<number>();
+  for (const {session, proc, delta} of pairs) {
+    if (delta > MAX_MATCH_DELTA_MS) break; // sorted by delta, all remaining are worse
+    if (usedSessions.has(session.sessionId) || usedPids.has(proc.pid)) continue;
+    session.pid = proc.pid;
+    session.processStartedAt = proc.startTime;
+    usedSessions.add(session.sessionId);
+    usedPids.add(proc.pid);
   }
 }
 
@@ -193,75 +256,45 @@ export function scanSessions(options: {
         modifiedAt: fileStat.mtimeMs,
         createdAt: fileStat.birthtimeMs,
         pid: 0,
+        processStartedAt: 0,
       });
     }
   }
 
-  // Get active claude processes: exact session->PID mapping and per-dir PID lists
-  const {sessionPids, dirPids} = getActiveClaudeProcesses();
+  const processes = getActiveClaudeProcesses();
 
-  // Filter stale sessions, but keep all sessions for dirs with active processes
-  // (a long-idle but still-running session shouldn't be excluded by age)
+  // Match against all sessions first — a long-idle process may have a stale
+  // file that would be excluded by the 24h filter. Matching first ensures
+  // active processes always find their session.
+  matchProcesses(sessions, processes);
+
+  // Now filter: keep matched sessions (regardless of age) and recent unmatched ones
   const filtered = sessions.filter((s) => {
     if (showAll) return true;
-    if (dirPids.has(s.projectDir)) return true;
+    if (s.pid > 0) return true;
     return now - s.modifiedAt <= STALE_THRESHOLD_MS;
   });
 
-  // Sort by modifiedAt descending, but deprioritize ended sessions.
-  // A closed session writes last-prompt as its final record, making its mtime
-  // more recent than a long-idle but still-running session.
-  // Only check sessions in dirs with active processes (where sort order matters).
-  const endedSessions = new Set<string>();
-  for (const s of filtered) {
-    if (dirPids.has(s.projectDir) && isSessionEnded(s.jsonlFile)) {
-      endedSessions.add(s.sessionId);
-    }
-  }
-  filtered.sort((a, b) => {
-    const aEnded = endedSessions.has(a.sessionId) ? 1 : 0;
-    const bEnded = endedSessions.has(b.sessionId) ? 1 : 0;
-    if (aEnded !== bEnded) return aEnded - bEnded; // non-ended first
-    return b.modifiedAt - a.modifiedAt;
-  });
-
   if (showAll) {
-    // Show all, deduplicated to one per project (most recently modified wins)
+    // Deduplicate to one per project (prefer matched sessions, then most recent)
+    filtered.sort((a, b) => {
+      if (a.pid && !b.pid) return -1;
+      if (!a.pid && b.pid) return 1;
+      return b.modifiedAt - a.modifiedAt;
+    });
     const seen = new Set<string>();
     const result = filtered.filter((s) => {
       if (seen.has(s.projectDir)) return false;
       seen.add(s.projectDir);
       return true;
     });
-    assignPids(result, sessionPids);
-    result.sort((a, b) => a.createdAt - b.createdAt);
+    result.sort((a, b) => (a.processStartedAt || Infinity) - (b.processStartedAt || Infinity));
     return result;
   }
 
-  // For each active dir, keep N most recently modified sessions (N = process count).
-  // Sessions are already sorted by modifiedAt desc, so first N per dir are the active ones.
-  // Assign exact PIDs by session ID where possible, fall back to dir-based assignment.
-  const result: DiscoveredSession[] = [];
-  const pidQueues = new Map<string, number[]>();
-  for (const [dirName, pids] of dirPids) {
-    pidQueues.set(dirName, [...pids]);
-  }
-
-  for (const s of filtered) {
-    const queue = pidQueues.get(s.projectDir);
-    if (queue && queue.length > 0) {
-      const exactPid = sessionPids.get(s.sessionId);
-      if (exactPid !== undefined && queue.includes(exactPid)) {
-        s.pid = exactPid;
-        queue.splice(queue.indexOf(exactPid), 1);
-      } else {
-        s.pid = queue.shift()!;
-      }
-      result.push(s);
-    }
-  }
-
-  result.sort((a, b) => a.createdAt - b.createdAt);
+  // Default: return only sessions matched to a running process
+  const result = filtered.filter((s) => s.pid > 0);
+  result.sort((a, b) => a.processStartedAt - b.processStartedAt);
 
   return result;
 }

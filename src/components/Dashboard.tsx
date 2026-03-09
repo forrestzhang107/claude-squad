@@ -67,6 +67,7 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
         const existing = tracked.get(d.jsonlFile);
         if (existing) {
           existing.pid = d.pid;
+          existing.processStartedAt = d.processStartedAt;
           continue;
         }
 

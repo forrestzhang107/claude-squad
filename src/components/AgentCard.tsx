@@ -30,9 +30,8 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
   const waitingDuration = session.activity === 'waiting' ? now - session.lastActivityAt : 0;
   const character = getCharacter(session.activity, waitingDuration);
   const color = getActivityColor(session.activity);
-  const duration = session.sessionStartedAt
-    ? formatDuration(now - session.sessionStartedAt)
-    : '';
+  const startedAt = session.processStartedAt || session.sessionStartedAt;
+  const duration = startedAt ? formatDuration(now - startedAt) : '';
 
   return (
     <Box

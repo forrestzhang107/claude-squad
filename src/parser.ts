@@ -36,10 +36,20 @@ function findGitRoot(dir: string): string {
 
 function parseRepoName(gitRoot: string): string {
   try {
-    const configPath = path.join(gitRoot, '.git', 'config');
+    let gitDir = path.join(gitRoot, '.git');
+    // In a worktree, .git is a file containing "gitdir: <path>"
+    const stat = fs.statSync(gitDir);
+    if (stat.isFile()) {
+      const content = fs.readFileSync(gitDir, 'utf-8').trim();
+      const match = content.match(/^gitdir:\s*(.+)/);
+      if (match) {
+        gitDir = path.resolve(gitRoot, match[1]);
+      }
+    }
+    const configPath = path.join(gitDir, 'config');
     const config = fs.readFileSync(configPath, 'utf-8');
-    const match = config.match(/url\s*=\s*.*[/:]([^/]+\/[^/]+?)(?:\.git)?\s*$/m);
-    if (match) return match[1].split('/').pop() || match[1]; // e.g. "claude-squad"
+    const urlMatch = config.match(/url\s*=\s*.*[/:]([^/]+\/[^/]+?)(?:\.git)?\s*$/m);
+    if (urlMatch) return urlMatch[1].split('/').pop() || urlMatch[1]; // e.g. "claude-squad"
   } catch {
     // ignore
   }
@@ -335,14 +345,21 @@ export function processLine(session: AgentSession, line: string): boolean {
           changed = true;
         }
       }
-    } else if (
-      record.type === 'system' &&
-      (record.subtype === 'turn_duration' || record.subtype === 'stop_hook_summary')
-    ) {
-      session.activity = 'waiting';
-      session.statusText = 'Waiting for input';
-      resetToolState(session);
-      changed = true;
+    } else if (record.type === 'system') {
+      if (record.subtype === 'turn_duration' || record.subtype === 'stop_hook_summary') {
+        session.activity = 'waiting';
+        session.statusText = 'Waiting for input';
+        resetToolState(session);
+        changed = true;
+      } else if (record.subtype === 'compact_boundary') {
+        // Context compaction — session is continuing, not ending.
+        // A `last-prompt` record fires just before this, which incorrectly
+        // sets "Session ended". Override back to active.
+        session.activity = 'active';
+        session.statusText = 'Compacting context...';
+        resetToolState(session);
+        changed = true;
+      }
     } else if (record.type === 'last-prompt') {
       session.activity = 'waiting';
       session.statusText = 'Session ended';

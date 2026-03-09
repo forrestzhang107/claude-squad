@@ -4,7 +4,7 @@
 
 | Activity | Face | Color | Label | Triggered By |
 |----------|------|-------|-------|-------------|
-| `waiting` | `(·‿·)` / `(._.)` | white | Waiting | Turn end (see below), interrupt, or idle timeout. After 10 min, art switches to `(._.)` (visual only). |
+| `waiting` | `(·‿·)` / `(._.)` | white | Waiting | Turn end signal (`turn_duration`, `stop_hook_summary`), interrupt, or `last-prompt`. After 10 min, art switches to `(._.)` (visual only). |
 | `inactive` | `(-_-)zzZ` | gray | Inactive | JSONL file unmodified for 60+ minutes |
 | `active` | `(^_^)♪` | cyan | Working | New user prompt ("Starting...") or assistant text block ("Responding...") |
 | `thinking` | `(o.o)...` | cyan | Thinking | Assistant `thinking` block (no tool_use in same message) |
@@ -44,7 +44,7 @@ New user prompt  -->  active ("Starting...", respondedAt=0)
       activity]   ("Thinking...")  ("Responding...", respondedAt=now)
          |              |           |
          v              v           v
-    tool_result    next record   turn_duration / stop_hook_summary / idle timeout (10s)
+    tool_result    next record   turn_duration / stop_hook_summary
          |                          |
          v                          v
     active ("Working...")     waiting ("Waiting for input")
@@ -61,28 +61,36 @@ A turn ends (→ `waiting`) via one of these signals:
 
 | Signal | Source | Timing |
 |--------|--------|--------|
-| `turn_duration` | System record in JSONL | Immediate (when present) |
-| `stop_hook_summary` | System record in JSONL | Immediate (when present) |
-| Idle timeout on "Responding..." | `respondedAt` set + 10s no file changes | 10 seconds |
+| `turn_duration` | System record in JSONL | Immediate |
+| `stop_hook_summary` | System record in JSONL | Immediate |
 | `[Request interrupted by user]` | User record from Ctrl+C | Immediate |
-| `last-prompt` | Final JSONL record on clean exit | Immediate |
+| `last-prompt` | Final JSONL record on clean exit | Immediate (but see compaction below) |
 | New user prompt | User record (non-tool-result) | Immediate (→ `active`) |
 
-**Why `respondedAt` matters:** The `active` state is used for both "Starting..."
-(user prompt sent, model thinking) and "Responding..." (text block received).
-Only "Responding..." should idle-timeout, because "Starting..." means the model
-is still generating and the JSONL won't update until the response is complete.
+There is **no** idle-based timeout for the waiting transition. Earlier versions used a 10-second idle timeout on "Responding..." state, but this caused false "Waiting for input" flashes when the model paused between tool calls mid-turn. The definitive JSONL signals above are the only way to enter waiting state.
 
-- `respondedAt = 0`: "Starting..." — no idle timeout
-- `respondedAt > 0`: "Responding..." — idle timeout after 10s
+**`respondedAt` tracking:** The `active` state is used for both "Starting..." and "Responding...". `respondedAt` tracks when a text-only assistant message was seen:
+
+- `respondedAt = 0`: "Starting..." or "Working..." — model is generating or between tool calls
+- `respondedAt > 0`: "Responding..." — model sent text, may or may not be end of turn
 - Cleared when `tool_use` arrives (text was mid-stream, not end of turn)
+
+## Context Compaction
+
+When Claude Code compacts context (auto-triggered near context limit), this sequence is written:
+
+1. `last-prompt` → would set "Session ended" (incorrect during compaction)
+2. `compact_boundary` → overrides to `active` ("Compacting context...")
+3. New `user` record → normal "Starting..." flow resumes
+
+The `compact_boundary` record (type `system`, subtype `compact_boundary`) signals that the session is continuing, not ending. It contains `compactMetadata.trigger` ("auto") and `compactMetadata.preTokens` (token count before compaction).
 
 ## Tool Result Handling
 
 When all `tool_result` records arrive and `activeToolIds` empties:
 - State transitions to `active` ("Working...") with `respondedAt=0`
-- This prevents stale tool states (e.g. `reading`) from triggering idle timeout
-  while the model generates its next response
+- `hadToolsInTurn` is cleared
+- This signals that the model is generating its next response
 
 ## Permission Detection
 

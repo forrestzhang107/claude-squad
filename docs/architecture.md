@@ -33,9 +33,23 @@
 1. Read dirs from `~/.claude/projects/`
 2. Resolve encoded dir names back to filesystem paths (e.g. `-Users-forrest-Repos-telvana-telvana-api` -> `/Users/forrest/Repos/telvana/telvana-api`)
 3. Find `.jsonl` files in each dir
-4. Use `ps` + `lsof` to find running claude processes and their working directories
-5. Match sessions to processes, allowing N sessions per dir where N = process count
-6. Fallback: if no process info, show most recent session per project
+4. Use `ps -eo pid,comm` to find running `claude` processes, then `ps -o lstart=` for start times
+5. Match sessions to processes by correlating process start times with `SessionStart` hook timestamps in JSONL files (greedy closest-match algorithm)
+6. Default: show only sessions matched to a running process. `--all`: show one session per project (prefer matched, then most recent)
+
+### Process Matching Details
+
+Directory-based matching (CWD via `lsof`) is **not used** — multiple sessions can share a CWD (e.g. worktrees), making it unreliable. Instead, matching is purely timestamp-based:
+
+- Each JSONL file can contain multiple `SessionStart` hook events (from `--resume` operations)
+- For each (session, process) pair, the closest `SessionStart` timestamp to the process start time is used
+- All pairs are sorted by time delta and greedily assigned (closest match first, no reuse)
+- `SessionStart` timestamps are cached by file path + size (incremental reads for growing files)
+- Falls back to file birth time if no `SessionStart` hooks are found
+
+### Stale Session Filtering
+
+Sessions are matched to processes **before** applying the 24-hour stale filter. This ensures a long-running process always finds its session even if the file hasn't been modified recently. Unmatched sessions older than 24 hours are excluded.
 
 ## JSONL Record Types
 
@@ -51,18 +65,24 @@ The parser handles these record types from Claude Code transcripts:
 | `type: "system"`, `subtype: "turn_duration"` or `"stop_hook_summary"` | -- | Turn ended, reset to waiting |
 | `type: "progress"`, `data.type: "bash_progress"` | -- | Reset permission timer |
 | `type: "progress"`, `data.type: "mcp_progress"` | -- | Reset permission timer |
+| `type: "progress"`, `data.type: "agent_progress"` | nested `message` | Subagent tool_use/tool_result tracking |
+| `type: "system"`, `subtype: "compact_boundary"` | `compactMetadata` | Context compaction (override `last-prompt` waiting state) |
+| `type: "progress"`, `data.type: "tool_permission_request"` | -- | Explicit permission state |
+| `type: "progress"`, `data.type: "hook_progress"`, `hookEvent: "SessionStart"` | `timestamp` | Process-to-session matching (in scanner) |
+| `type: "last-prompt"` | -- | Session ended cleanly |
 
 ## Timeout Heuristics
 
-- **Permission detection (7s)**: If a tool_use has been active 7+ seconds with no progress events or tool_result, assume waiting for user approval
-- **Idle detection (10s)**: If JSONL file hasn't been modified for 10s and session is in a timeout-eligible state (e.g. "Responding..."), transition to "Waiting for input"
+- **Permission detection (7s)**: If a tool_use has been active 7+ seconds with no progress events or tool_result, assume waiting for user approval. Exempt tools: `Agent`, `Task`, `AskUserQuestion`, `Skill` (long-running by nature). Also applies to subagent tool calls tracked via `agent_progress`.
 - **Inactive detection (60min)**: If JSONL file hasn't been modified for 60 minutes, transition to "Inactive"
+
+Note: There is **no** idle-to-waiting timeout. The "Waiting for input" state is set exclusively by definitive JSONL signals (`turn_duration`, `stop_hook_summary`, user interrupt, `last-prompt`). This avoids false "Waiting" flashes when the model pauses between tool calls mid-turn.
 
 ## Working Directory Detection
 
 1. Collect file paths from `Read`, `Edit`, `Write`, `Glob`, `Grep` tool inputs
 2. Keep last 20 paths
 3. Score directories by `frequency * depth` to find the deepest common working directory
-4. Walk up to find `.git` root
+4. Walk up to find `.git` root (follows `gitdir:` reference in worktrees)
 5. Parse repo name from `.git/config` remote URL
-6. Fall back to git root basename, then spawn project name
+6. Fall back to git root basename, then project name

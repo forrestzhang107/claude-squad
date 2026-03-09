@@ -4,40 +4,16 @@ import {processLine} from './parser.js';
 
 const POLL_INTERVAL_MS = 1000;
 const PERMISSION_TIMEOUT_MS = 7000;
-const IDLE_TIMEOUT_MS = 10000; // 10s with no file changes → waiting
 const INACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 60m with no file changes → inactive
 const PERMISSION_EXEMPT_TOOLS = new Set(['Agent', 'Task', 'AskUserQuestion', 'Skill']);
 
-function isWaitingState(activity: AgentSession['activity']): boolean {
-  return activity === 'waiting' || activity === 'inactive';
-}
-
-function applyIdleTransitions(session: AgentSession, ageMs: number): boolean {
+function applyInactiveTransition(session: AgentSession, ageMs: number): boolean {
   if (ageMs > INACTIVE_TIMEOUT_MS && session.activity !== 'inactive') {
     session.activity = 'inactive';
     session.statusText = 'Inactive';
     return true;
   }
-  if (ageMs > IDLE_TIMEOUT_MS && canIdleTimeout(session)) {
-    session.activity = 'waiting';
-    session.statusText = 'Waiting for input';
-    session.hadToolsInTurn = false;
-    session.respondedAt = 0;
-    return true;
-  }
   return false;
-}
-
-/**
- * Whether the session's current state can transition to 'waiting' via idle timeout.
- * 'active' with respondedAt > 0 ("Responding...") can timeout, but 'active' with
- * respondedAt === 0 ("Starting...") and 'thinking' cannot -- the model is mid-generation
- * and the JSONL won't update until the response is complete.
- */
-function canIdleTimeout(session: AgentSession): boolean {
-  if (isWaitingState(session.activity)) return false;
-  if (session.activity === 'active') return session.respondedAt > 0;
-  return session.activity !== 'thinking' && session.activeToolIds.size === 0;
 }
 
 export function createSession(discovered: DiscoveredSession): AgentSession {
@@ -51,6 +27,7 @@ export function createSession(discovered: DiscoveredSession): AgentSession {
     statusText: 'Waiting for input',
     lastActivityAt: discovered.modifiedAt,
     sessionStartedAt: 0,
+    processStartedAt: discovered.processStartedAt,
     currentFile: '',
     toolHistory: [],
     activeSubagents: 0,
@@ -116,7 +93,8 @@ export function startWatching(
     if (
       (session.activeToolIds.size > 0 || session.pendingSubagentToolIds.size > 0) &&
       session.activity !== 'permission' &&
-      !isWaitingState(session.activity)
+      session.activity !== 'waiting' &&
+      session.activity !== 'inactive'
     ) {
       const now = Date.now();
       let needsPermission = false;
@@ -148,12 +126,12 @@ export function startWatching(
       }
     }
 
-    // Idle transitions: active → waiting (10s) → inactive (60m)
+    // Inactive transition: 60m with no file changes → inactive
     if (!changed && session.activity !== 'permission') {
       try {
         const stat = fs.statSync(session.jsonlFile);
         const age = Date.now() - stat.mtimeMs;
-        changed = applyIdleTransitions(session, age);
+        changed = applyInactiveTransition(session, age);
       } catch {
         // ignore
       }
@@ -179,7 +157,7 @@ function readFullFile(session: AgentSession): void {
 
     const stat = fs.statSync(session.jsonlFile);
     const age = Date.now() - stat.mtimeMs;
-    applyIdleTransitions(session, age);
+    applyInactiveTransition(session, age);
 
     session.fileOffset = stat.size;
   } catch {

@@ -25,6 +25,7 @@ export interface AgentSession {
   statusText: string;
   lastActivityAt: number;
   sessionStartedAt: number;
+  processStartedAt: number;
   currentFile: string;
   toolHistory: ToolHistoryEntry[];
   activeSubagents: number;
@@ -55,4 +56,5 @@ export interface DiscoveredSession {
   modifiedAt: number;
   createdAt: number;
   pid: number;
+  processStartedAt: number;
 }

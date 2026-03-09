@@ -16,6 +16,10 @@ npm run start    # Run the dashboard
 
 Do NOT commit, push, or perform any git actions unless explicitly asked. This includes staging files, creating commits, and pushing to remote.
 
+## Workflow
+
+Always run `npm run build` after making changes so they can be tested locally.
+
 ## Key Conventions
 
 - ESM (`"type": "module"`)
