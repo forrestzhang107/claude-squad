@@ -20,6 +20,7 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [tick, setTick] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [initialScanDone, setInitialScanDone] = useState(false);
 
   // padding=1 adds 1 char on each side, gap=1 adds 1 char between cards
   const cols = Math.max(1, Math.floor(((stdout?.columns ?? 80) - 2) / (CARD_WIDTH + 1)));
@@ -92,6 +93,7 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
     }
 
     scan();
+    setInitialScanDone(true);
     const interval = setInterval(scan, RESCAN_INTERVAL_MS);
 
     return () => {
@@ -99,6 +101,14 @@ export function Dashboard({projectFilter, showAll}: DashboardProps) {
       for (const cleanup of cleanupFns.values()) cleanup();
     };
   }, [projectFilter, showAll]);
+
+  if (!initialScanDone) {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text bold color="cyan">claude-squad</Text>
+      </Box>
+    );
+  }
 
   if (sessions.length === 0) {
     return (
