@@ -1,23 +1,20 @@
 import React, {useState, useEffect} from 'react';
 import {Box, Text, useInput, useApp, useStdout} from 'ink';
-import {scanSessions} from '../scanner.js';
-import {createSession, resetFileState, startWatching} from '../watcher.js';
+import {pollSessions} from '../poller.js';
 import type {AgentSession} from '../types.js';
 import {AgentCard} from './AgentCard.js';
 import {switchToTerminalTab} from '../terminal.js';
 
-const RESCAN_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 2000;
 const CARD_WIDTH = 40;
 
 export function Dashboard() {
   const {exit} = useApp();
   const {stdout} = useStdout();
   const [sessions, setSessions] = useState<AgentSession[]>([]);
-  const [tick, setTick] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [initialScanDone, setInitialScanDone] = useState(false);
+  const [initialPollDone, setInitialPollDone] = useState(false);
 
-  // padding=1 adds 1 char on each side, gap=1 adds 1 char between cards
   const cols = Math.max(1, Math.floor(((stdout?.columns ?? 80) - 2) / (CARD_WIDTH + 1)));
 
   const lastIndex = sessions.length - 1;
@@ -40,71 +37,35 @@ export function Dashboard() {
       setSelectedIndex((i) => clamp(i + cols));
     } else if (key.return) {
       const session = sessions[selectedIndex];
-      if (session?.pid) {
-        switchToTerminalTab(session.pid);
+      if (session) {
+        switchToTerminalTab(session.tty);
       }
     }
   });
 
   useEffect(() => {
-    const tracked = new Map<number, AgentSession>();
-    const cleanupFns = new Map<number, () => void>();
+    const previous = new Map<number, AgentSession>();
 
-    function stopWatching(pid: number) {
-      const cleanup = cleanupFns.get(pid);
-      if (cleanup) {
-        cleanup();
-        cleanupFns.delete(pid);
+    function poll() {
+      const current = pollSessions(previous);
+
+      // Update previous map for next poll
+      previous.clear();
+      for (const s of current) {
+        previous.set(s.pid, s);
       }
+
+      setSessions(current);
     }
 
-    function scan() {
-      const {sessions: discovered, activePids} = scanSessions();
+    poll();
+    setInitialPollDone(true);
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
 
-      // Remove sessions whose process has exited
-      for (const pid of tracked.keys()) {
-        if (!activePids.has(pid)) {
-          tracked.delete(pid);
-          stopWatching(pid);
-        }
-      }
-
-      // Add or update discovered sessions
-      for (const d of discovered) {
-        const existing = tracked.get(d.pid);
-
-        if (existing) {
-          // JSONL file changed (e.g. /clear) — restart watcher on new file
-          if (d.jsonlFile !== existing.jsonlFile) {
-            stopWatching(d.pid);
-            existing.jsonlFile = d.jsonlFile;
-            resetFileState(existing);
-            const cleanup = startWatching(existing, () => setTick((t) => t + 1));
-            cleanupFns.set(d.pid, cleanup);
-          }
-          continue;
-        }
-
-        const session = createSession(d);
-        tracked.set(d.pid, session);
-        const cleanup = startWatching(session, () => setTick((t) => t + 1));
-        cleanupFns.set(d.pid, cleanup);
-      }
-
-      setSessions(Array.from(tracked.values()));
-    }
-
-    scan();
-    setInitialScanDone(true);
-    const interval = setInterval(scan, RESCAN_INTERVAL_MS);
-
-    return () => {
-      clearInterval(interval);
-      for (const cleanup of cleanupFns.values()) cleanup();
-    };
+    return () => clearInterval(interval);
   }, []);
 
-  if (!initialScanDone) {
+  if (!initialPollDone) {
     return null;
   }
 
