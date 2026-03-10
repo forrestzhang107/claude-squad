@@ -325,6 +325,7 @@ export function scanSessions(): ScanResult {
 
     const candidates = (proc.projectDir && sessionsByDir.get(proc.projectDir)) || sessions;
     const unclaimed = candidates.filter((s) => s.pid === 0);
+    if (unclaimed.length === 0) continue;
 
     // Try recent snippets in reverse order. The terminal may contain responses
     // from previous sessions (before /clear), so the latest snippet might match

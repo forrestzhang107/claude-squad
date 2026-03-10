@@ -105,11 +105,7 @@ export function Dashboard() {
   }, []);
 
   if (!initialScanDone) {
-    return (
-      <Box flexDirection="column" padding={1}>
-        <Text bold color="cyan">claude-squad</Text>
-      </Box>
-    );
+    return null;
   }
 
   if (sessions.length === 0) {
