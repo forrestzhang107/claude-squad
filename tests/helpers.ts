@@ -17,6 +17,8 @@ export function makeSession(overrides: Partial<AgentSession> = {}): AgentSession
     activity: 'waiting',
     statusText: 'Waiting for input',
     lastActivityAt: Date.now(),
+    lastPrompt: '',
+    lastResponse: [],
     ...overrides,
   };
 }

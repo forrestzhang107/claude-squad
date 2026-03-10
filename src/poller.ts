@@ -166,6 +166,8 @@ const BASH_CMD_MAX = 40;
 interface TerminalState {
   activity: AgentActivity;
   statusText: string;
+  lastPrompt: string;
+  lastResponse: string[];
 }
 
 /**
@@ -178,20 +180,24 @@ interface TerminalState {
  */
 export function parseTerminalState(content: string): TerminalState {
   if (!content || !content.trim()) {
-    return {activity: 'waiting', statusText: 'Waiting for input'};
+    return {activity: 'waiting', statusText: 'Waiting for input', lastPrompt: '', lastResponse: []};
   }
 
   // 1. Permission — highest priority (check last 2000 chars)
   const tail = content.slice(-2000);
+
+  // Parse conversation context (prompt + response) once for all return paths
+  const allLines = content.split('\n');
+  const conversation = parseConversation(allLines);
+
   if (PERMISSION_RE.test(tail) || PERMISSION_PROCEED_RE.test(tail)) {
-    return {activity: 'permission', statusText: 'Needs permission'};
+    return {activity: 'permission', statusText: 'Needs permission', ...conversation};
   }
 
   // 2. Scan backwards for key markers.
   //    ⏺ = tool call or response line
   //    ✻ = completion summary (Claude finished a response cycle)
   //    ✢ = active spinner (Claude is thinking/working)
-  const allLines = content.split('\n');
   let lastBulletIdx = -1;
   let lastCompletionIdx = -1;
   let lastToolLine: RegExpMatchArray | null = null;
@@ -239,44 +245,102 @@ export function parseTerminalState(content: string): TerminalState {
 
   // 3. ✢ active spinner is the most recent marker → Claude is thinking
   if (activeSpinnerIdx !== -1 && activeSpinnerIdx > lastBulletIdx && activeSpinnerIdx > lastCompletionIdx) {
-    return {activity: 'thinking', statusText: 'Thinking...'};
+    return {activity: 'thinking', statusText: 'Thinking...', ...conversation};
   }
 
   // 4. ✻ completion summary after last ⏺ → Claude finished, waiting for input
   if (lastCompletionIdx !== -1 && lastCompletionIdx > lastBulletIdx) {
-    return {activity: 'waiting', statusText: 'Waiting for input'};
+    return {activity: 'waiting', statusText: 'Waiting for input', ...conversation};
   }
 
   // 5. Thinking — model is reasoning (⏺ Thinking...)
   if (lastBulletIsThinking) {
-    return {activity: 'thinking', statusText: 'Thinking...'};
+    return {activity: 'thinking', statusText: 'Thinking...', ...conversation};
   }
 
   // 6. Tool active — determine specific activity from tool name
   if (lastToolLine) {
     const toolName = lastToolLine[1];
     const args = lastToolLine[2] || '';
-    return mapToolToState(toolName, args);
+    return {...mapToolToState(toolName, args), ...conversation};
   }
 
   // 7. Collapsed tool summaries (e.g. "⏺ Searched for 3 patterns")
   if (lastBulletIsSearch) {
-    return {activity: 'searching', statusText: 'Searching'};
+    return {activity: 'searching', statusText: 'Searching', ...conversation};
   }
   if (lastBulletIsRead) {
-    return {activity: 'reading', statusText: 'Reading files'};
+    return {activity: 'reading', statusText: 'Reading files', ...conversation};
   }
 
   // 8. Responding — last ⏺ line is text
   if (lastBulletIsText) {
-    return {activity: 'active', statusText: 'Responding...'};
+    return {activity: 'active', statusText: 'Responding...', ...conversation};
   }
 
   // 9. No ⏺ content found — fresh session or just a prompt
-  return {activity: 'waiting', statusText: 'Waiting for input'};
+  return {activity: 'waiting', statusText: 'Waiting for input', ...conversation};
 }
 
-function mapToolToState(toolName: string, args: string): TerminalState {
+const RESPONSE_LINES = 3;
+const PROMPT_RE = /^❯\s*(.+)/;
+
+/** Extract the user's latest prompt and agent's latest text response from terminal content. */
+function parseConversation(lines: string[]): { lastPrompt: string; lastResponse: string[] } {
+  let lastPrompt = '';
+  let lastResponse: string[] = [];
+
+  // Find the last ❯ prompt with text
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].trim().match(PROMPT_RE);
+    if (m) {
+      lastPrompt = m[1].trim();
+      break;
+    }
+  }
+
+  // Collect the last plain-text response lines from Claude.
+  // First skip past trailing chrome (❯ prompt, ✻ completion, separators, spinners)
+  // then collect response text until we hit a tool call or another prompt.
+  let startIdx = lines.length - 1;
+  for (; startIdx >= 0; startIdx--) {
+    const trimmed = lines[startIdx].trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('❯') || COMPLETION_RE.test(trimmed) ||
+        ACTIVE_SPINNER_RE.test(trimmed) ||
+        /^[─━\-=]{3,}/.test(trimmed) || trimmed.startsWith('⏵')) continue;
+    break;
+  }
+
+  const responseLines: string[] = [];
+  for (let i = startIdx; i >= 0; i--) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    // Stop at prompts, completion markers, spinners
+    if (trimmed.startsWith('❯') || COMPLETION_RE.test(trimmed) ||
+        ACTIVE_SPINNER_RE.test(trimmed)) break;
+    // Skip terminal UI chrome
+    if (/^[─━\-=]{3,}/.test(trimmed) || trimmed.startsWith('⏵')) continue;
+    if (trimmed.startsWith('⏺')) {
+      // Tool calls, thinking, collapsed summaries end the response block
+      if (TOOL_LINE_RE.test(trimmed) || THINKING_RE.test(trimmed) ||
+          COLLAPSED_SEARCH_RE.test(trimmed) || COLLAPSED_READ_RE.test(trimmed)) break;
+      // Plain text response line — include without the ⏺ prefix
+      if (trimmed.length > 2) {
+        responseLines.push(trimmed.slice(2).trim());
+      }
+      continue;
+    }
+    // Regular text continuation line
+    responseLines.push(trimmed);
+  }
+  responseLines.reverse();
+  lastResponse = responseLines.slice(-RESPONSE_LINES);
+
+  return { lastPrompt, lastResponse };
+}
+
+function mapToolToState(toolName: string, args: string): { activity: AgentActivity; statusText: string } {
   switch (toolName) {
     case 'Read':
       return {activity: 'reading', statusText: `Reading ${args}`};
@@ -365,7 +429,7 @@ export function pollSessions(
   for (const proc of processes) {
     activePids.add(proc.pid);
     const content = contents.get(proc.tty) || '';
-    let {activity, statusText} = parseTerminalState(content);
+    let {activity, statusText, lastPrompt, lastResponse} = parseTerminalState(content);
 
     const prev = previous.get(proc.pid);
 
@@ -411,6 +475,8 @@ export function pollSessions(
       activity,
       statusText,
       lastActivityAt,
+      lastPrompt,
+      lastResponse,
     });
   }
 

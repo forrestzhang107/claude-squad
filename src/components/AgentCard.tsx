@@ -50,6 +50,19 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
       {duration ? (
         <Text dimColor>Session: {duration}</Text>
       ) : null}
+
+      {session.lastPrompt ? (
+        <Box marginTop={1} height={2} overflow="hidden">
+          <Text wrap="wrap">&gt; {session.lastPrompt}</Text>
+        </Box>
+      ) : null}
+      {session.lastResponse.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          {session.lastResponse.map((line, i) => (
+            <Text key={i} wrap="truncate">{line}</Text>
+          ))}
+        </Box>
+      ) : null}
     </Box>
   );
 }

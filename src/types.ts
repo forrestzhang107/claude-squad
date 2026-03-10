@@ -19,4 +19,6 @@ export interface AgentSession {
   activity: AgentActivity;
   statusText: string;
   lastActivityAt: number;
+  lastPrompt: string;
+  lastResponse: string[];
 }
