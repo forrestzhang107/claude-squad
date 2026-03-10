@@ -255,4 +255,28 @@ describe('pollSessions', () => {
     result = pollSessions(prevMap(result), deps3);
     expect(result).toHaveLength(2);
   });
+
+  test('caches lastPrompt across polls when prompt leaves history window', () => {
+    const proc = makeProc();
+    // Poll 1: terminal has a visible prompt
+    const contents1 = new Map([[proc.tty, lines(
+      '❯ fix the bug',
+      '⏺ Working on it.',
+      '✻ Worked for 10s',
+      '❯ ',
+    )]]);
+    const deps1 = makeDeps({processes: [proc], contents: contents1});
+    let result = pollSessions(new Map(), deps1);
+    expect(result[0].lastPrompt).toBe('fix the bug');
+
+    // Poll 2: prompt scrolled out of history (no ❯ with text)
+    const contents2 = new Map([[proc.tty, lines(
+      '⏺ Done. The bug is fixed.',
+      '✻ Worked for 30s',
+      '❯ ',
+    )]]);
+    const deps2 = makeDeps({processes: [proc], contents: contents2});
+    result = pollSessions(prevMap(result), deps2);
+    expect(result[0].lastPrompt).toBe('fix the bug');
+  });
 });

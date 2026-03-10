@@ -496,5 +496,57 @@ describe('parseTerminalState', () => {
     const state = parseTerminalState(content);
     expect(state.activity).toBe('waiting');
   });
+
+  // --- Response survives through tool calls ---
+
+  test('shows text response from before active tool calls', () => {
+    const content = lines(
+      '⏺ Good findings. Let me address the actionable ones.',
+      '⏺ Update(src/poller.ts)',
+      '  ⎿  Added 1 line, removed 1 line',
+      '⏺ Bash(npm run build)',
+      '  ⎿  running...',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual([
+      'Good findings. Let me address the actionable ones.',
+    ]);
+  });
+
+  // --- Tool sub-output filtering from lastResponse ---
+
+  test('omits tool sub-output between tool call and response', () => {
+    const content = lines(
+      '⏺ Bash(gh run list --limit 3)',
+      '  ⎿  completed  success Release: staging',
+      '     completed  success Release: prod',
+      '⏺ Yes, deployed successfully.',
+      '✻ Worked for 30s',
+      '❯ ',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual(['Yes, deployed successfully.']);
+  });
+
+  // --- Chrome hint filtering from lastResponse ---
+
+  test.each([
+    ['⏵⏵ hint with esc to interrupt', '  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt', 'esc to interrupt'],
+    ['? for shortcuts', '  ? for shortcuts', '? for shortcuts'],
+    ['standalone esc to interrupt', 'esc to interrupt', 'esc to interrupt'],
+    ['Press up to edit queued messages', '  Press up to edit queued messages', 'Press up to edit queued messages'],
+  ])('omits %s from lastResponse', (_label, chromeLine, excluded) => {
+    const content = lines(
+      '⏺ Here is my response.',
+      '──────────────────────────────────────',
+      '❯ ',
+      '──────────────────────────────────────',
+      chromeLine,
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).not.toContainEqual(
+      expect.stringContaining(excluded),
+    );
+  });
 });
 

@@ -42,7 +42,7 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
       </Text>
 
       <Box justifyContent="center" marginY={1}>
-        <Text color="greenBright">{selected ? '> ' : '  '}</Text><Text color={color}>{character.art}</Text>
+        <Text color="magenta">{selected ? '* ' : '  '}</Text><Text color={color}>{character.art}</Text>
       </Box>
 
       <Text color={color} wrap="truncate">{session.statusText}</Text>
@@ -52,8 +52,8 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
       ) : null}
 
       {session.lastPrompt ? (
-        <Box marginTop={1}>
-          <Text wrap="truncate">&gt; {session.lastPrompt}</Text>
+        <Box marginTop={1} height={2} overflow="hidden">
+          <Text wrap="wrap">&gt; {session.lastPrompt}</Text>
         </Box>
       ) : null}
       {session.lastResponse.length > 0 ? (

@@ -309,7 +309,9 @@ const CHROME_RE = /^[─━\-=]{3,}/;
 
 /** Lines that are terminal UI decoration, not content. */
 function isChrome(trimmed: string): boolean {
-  return CHROME_RE.test(trimmed) || trimmed.startsWith('⏵');
+  return CHROME_RE.test(trimmed) || trimmed.startsWith('⏵') ||
+    trimmed === '? for shortcuts' || trimmed.includes('esc to interrupt') ||
+    trimmed === 'Press up to edit queued messages';
 }
 
 /** Lines that mark the end of a response block (prompt, completion, spinner). */
@@ -348,27 +350,36 @@ function parseConversation(lines: string[]): { lastPrompt: string; lastResponse:
     break;
   }
 
-  const responseLines: string[] = [];
+  // Pass 1: scan backwards to find the ⏺ text bullet that starts the response block
+  let textBulletIdx = -1;
   for (let i = startIdx; i >= 0; i--) {
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
     if (isResponseBoundary(trimmed)) break;
     if (isChrome(trimmed)) continue;
     if (trimmed.startsWith('⏺')) {
-      if (isToolBullet(trimmed)) break;
-      // Plain text response line — include without the ⏺ prefix
-      if (trimmed.length > 2) {
-        responseLines.push(trimmed.slice(2).trim());
-      }
-      continue;
+      if (isToolBullet(trimmed)) continue;
+      textBulletIdx = i;
+      break;
     }
-    // Skip tool output lines (⎿ prefix)
     if (trimmed.startsWith('⎿')) continue;
-    // Regular text continuation line
-    responseLines.push(trimmed);
   }
-  responseLines.reverse();
 
+  // Pass 2: collect the text bullet and its continuation lines (below it)
+  const responseLines: string[] = [];
+  if (textBulletIdx >= 0) {
+    const bulletTrimmed = lines[textBulletIdx].trim();
+    if (bulletTrimmed.length > 2) {
+      responseLines.push(bulletTrimmed.slice(2).trim());
+    }
+    for (let i = textBulletIdx + 1; i < lines.length && responseLines.length < RESPONSE_LINES; i++) {
+      const trimmed = lines[i].trim();
+      if (!trimmed) continue;
+      if (isChrome(trimmed) || isResponseBoundary(trimmed)) break;
+      if (trimmed.startsWith('⏺') || trimmed.startsWith('⎿')) break;
+      responseLines.push(trimmed);
+    }
+  }
   return { lastPrompt, lastResponse: responseLines.slice(0, RESPONSE_LINES) };
 }
 
@@ -411,17 +422,20 @@ export const STABLE_CONTENT_THRESHOLD = 2;
 export interface PollerState {
   gitRefreshCounter: number;
   contentFingerprints: Map<number, { tail: string; stableCount: number }>;
+  lastKnownPrompts: Map<number, string>;
 }
 
 const pollerState: PollerState = {
   gitRefreshCounter: 0,
   contentFingerprints: new Map(),
+  lastKnownPrompts: new Map(),
 };
 
 /** Reset mutable poller state. For testing only. */
 export function resetPollerState(): void {
   pollerState.gitRefreshCounter = 0;
   pollerState.contentFingerprints.clear();
+  pollerState.lastKnownPrompts.clear();
 }
 
 /** Dependency injection for pollSessions, enabling unit tests. */
@@ -497,6 +511,7 @@ export function pollSessions(
       ? deps.getGitBranch(proc.cwd)
       : prev.gitBranch;
 
+    if (lastPrompt) pollerState.lastKnownPrompts.set(proc.pid, lastPrompt);
     sessions.push({
       pid: proc.pid,
       tty: proc.tty,
@@ -507,14 +522,17 @@ export function pollSessions(
       activity,
       statusText,
       lastActivityAt,
-      lastPrompt,
+      lastPrompt: lastPrompt || pollerState.lastKnownPrompts.get(proc.pid) || '',
       lastResponse,
     });
   }
 
-  // Clean up fingerprints for dead processes
+  // Clean up state for dead processes
   for (const pid of pollerState.contentFingerprints.keys()) {
     if (!activePids.has(pid)) pollerState.contentFingerprints.delete(pid);
+  }
+  for (const pid of pollerState.lastKnownPrompts.keys()) {
+    if (!activePids.has(pid)) pollerState.lastKnownPrompts.delete(pid);
   }
 
   // Sort by process start time (oldest first)

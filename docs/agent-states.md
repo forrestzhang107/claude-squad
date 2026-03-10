@@ -17,7 +17,7 @@
 
 ## State Detection
 
-States are detected by reading terminal history via AppleScript (`history of tab`, last 3000 chars). Detection is priority-ordered:
+States are detected by reading terminal history via AppleScript (`history of tab`, last 10 000 chars). Detection is priority-ordered:
 
 1. **Permission** — `Allow ToolName(args)?` pattern in last 2000 chars
 1b. **Question** — `Enter to select · ↑/↓ to navigate` in last 2000 chars (AskUserQuestion UI)
