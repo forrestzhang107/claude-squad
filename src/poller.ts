@@ -133,3 +133,107 @@ export function readTerminalContents(ttys: string[]): Map<string, string> {
 
   return contents;
 }
+
+const PERMISSION_RE = /Allow \w[\w:.-]*\(.*?\)\?/;
+const TOOL_LINE_RE = /^⏺ (\w[\w:.-]*)\((.*)?\)\s*$/;
+const THINKING_RE = /^⏺ Thinking[.…]/;
+const BASH_CMD_MAX = 40;
+
+interface TerminalState {
+  activity: AgentActivity;
+  statusText: string;
+}
+
+/** Parse visible terminal content into an activity state. */
+export function parseTerminalState(content: string): TerminalState {
+  if (!content || !content.trim()) {
+    return {activity: 'waiting', statusText: 'Waiting for input'};
+  }
+
+  // 1. Permission — highest priority (check last 2000 chars)
+  const tail = content.slice(-2000);
+  if (PERMISSION_RE.test(tail)) {
+    return {activity: 'permission', statusText: 'Needs permission'};
+  }
+
+  // 2. Waiting — Claude's input prompt at end of screen
+  const lastLines = tail.split('\n').slice(-5);
+  if (lastLines.some((line) => /^>\s*$/.test(line))) {
+    return {activity: 'waiting', statusText: 'Waiting for input'};
+  }
+
+  // 3. Find the last ⏺ line to determine current activity
+  const allLines = content.split('\n');
+  let lastToolLine: RegExpMatchArray | null = null;
+  let lastBulletIsText = false;
+  let lastBulletIsThinking = false;
+
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    const line = allLines[i].trim();
+    if (!line.startsWith('⏺')) continue;
+
+    // Check for thinking indicator
+    if (THINKING_RE.test(line)) {
+      lastBulletIsThinking = true;
+      break;
+    }
+
+    const toolMatch = line.match(TOOL_LINE_RE);
+    if (toolMatch) {
+      lastToolLine = toolMatch;
+      break;
+    }
+    // It's a ⏺ line but not a tool invocation — it's response text
+    if (line.length > 2) {
+      lastBulletIsText = true;
+      break;
+    }
+  }
+
+  // 4. Thinking — model is reasoning
+  if (lastBulletIsThinking) {
+    return {activity: 'thinking', statusText: 'Thinking...'};
+  }
+
+  // 5. Tool active — determine specific activity from tool name
+  if (lastToolLine) {
+    const toolName = lastToolLine[1];
+    const args = lastToolLine[2] || '';
+    return mapToolToState(toolName, args);
+  }
+
+  // 6. Responding — last ⏺ line is text
+  if (lastBulletIsText) {
+    return {activity: 'active', statusText: 'Responding...'};
+  }
+
+  // 7. Fallback — something is on screen but unclear
+  return {activity: 'active', statusText: 'Working...'};
+}
+
+function mapToolToState(toolName: string, args: string): TerminalState {
+  switch (toolName) {
+    case 'Read':
+      return {activity: 'reading', statusText: `Reading ${args}`};
+    case 'Edit':
+      return {activity: 'editing', statusText: `Editing ${args}`};
+    case 'Write':
+      return {activity: 'editing', statusText: `Writing ${args}`};
+    case 'Bash': {
+      const cmd = args.length > BASH_CMD_MAX
+        ? args.slice(0, BASH_CMD_MAX) + '...'
+        : args;
+      return {activity: 'running', statusText: `$ ${cmd}`};
+    }
+    case 'Glob':
+    case 'Grep':
+    case 'WebFetch':
+    case 'WebSearch':
+      return {activity: 'searching', statusText: 'Searching'};
+    case 'Agent':
+    case 'Task':
+      return {activity: 'running', statusText: 'Running subtask'};
+    default:
+      return {activity: 'active', statusText: `Using ${toolName}`};
+  }
+}
