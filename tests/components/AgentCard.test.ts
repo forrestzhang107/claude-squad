@@ -1,33 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {formatTokens, formatDuration} from '../../src/components/AgentCard.js';
-
-// ── formatTokens ──
-
-describe('formatTokens', () => {
-  it('formats millions', () => {
-    expect(formatTokens(1234567)).toBe('1.2M');
-    expect(formatTokens(2000000)).toBe('2.0M');
-  });
-
-  it('formats thousands', () => {
-    expect(formatTokens(45200)).toBe('45.2k');
-    expect(formatTokens(1000)).toBe('1.0k');
-    expect(formatTokens(999999)).toBe('1000.0k');
-  });
-
-  it('formats small numbers as-is', () => {
-    expect(formatTokens(0)).toBe('0');
-    expect(formatTokens(999)).toBe('999');
-    expect(formatTokens(1)).toBe('1');
-  });
-
-  it('handles boundary values', () => {
-    expect(formatTokens(1000000)).toBe('1.0M');
-    expect(formatTokens(999)).toBe('999');
-  });
-});
-
-// ── formatDuration ──
+import {formatDuration} from '../../src/components/AgentCard.js';
 
 describe('formatDuration', () => {
   it('formats seconds', () => {

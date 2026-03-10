@@ -9,12 +9,6 @@ interface AgentCardProps {
   selected?: boolean;
 }
 
-export function formatTokens(tokens: number): string {
-  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
-  return `${tokens}`;
-}
-
 export function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
@@ -30,8 +24,7 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
   const waitingDuration = session.activity === 'waiting' ? now - session.lastActivityAt : 0;
   const character = getCharacter(session.activity, waitingDuration);
   const color = getActivityColor(session.activity);
-  const startedAt = session.processStartedAt || session.sessionStartedAt;
-  const duration = startedAt ? formatDuration(now - startedAt) : '';
+  const duration = session.processStartedAt ? formatDuration(now - session.processStartedAt) : '';
 
   return (
     <Box
@@ -48,38 +41,15 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
         ) : null}
       </Text>
 
-      <Text dimColor italic wrap="truncate-end">{session.taskSummary || ' '}</Text>
-
       <Box justifyContent="center" marginY={1}>
         <Text color="greenBright">{selected ? '> ' : '  '}</Text><Text color={color}>{character.art}</Text>
       </Box>
 
       <Text color={color} wrap="truncate">{session.statusText}</Text>
 
-      {session.currentFile ? (
-        <Text dimColor wrap="truncate">File: {session.currentFile}</Text>
-      ) : null}
-
-      {session.activeSubagents > 0 ? (
-        <Text color="magenta">
-          Subagents: {session.activeSubagents}
-        </Text>
-      ) : null}
-
-      {session.contextTokens > 0 ? (
-        <Text dimColor>
-          Context: {formatTokens(session.contextTokens)}{' '}
-          ({Math.round((session.contextTokens / session.contextMaxTokens) * 100)}%)
-        </Text>
-      ) : null}
-
       {duration ? (
         <Text dimColor>Session: {duration}</Text>
       ) : null}
-
-      <Box height={3} overflow="hidden" marginTop={1}>
-        <Text dimColor wrap="wrap">{session.lastResponseText || ' '}</Text>
-      </Box>
     </Box>
   );
 }
