@@ -87,8 +87,12 @@ export function getGitBranch(cwd: string): string {
   }
 }
 
-/** How many characters from the end of terminal history to read. */
-const HISTORY_TAIL_CHARS = 3000;
+/**
+ * How many characters from the end of terminal history to read.
+ * Needs to be large enough to capture the last ⏺ tool call even after
+ * verbose output (commit diffs, test results, long separator lines).
+ */
+const HISTORY_TAIL_CHARS = 10000;
 
 /**
  * Batch-read recent terminal output for given TTYs from Terminal.app.
