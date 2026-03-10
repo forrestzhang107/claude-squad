@@ -4,8 +4,7 @@
 
 | Activity | Face | Color | Label | Triggered By |
 |----------|------|-------|-------|-------------|
-| `waiting` | `(·‿·)` / `(._.)` | white | Waiting | `✻` completion summary after last `⏺`, or content unchanged for 2+ polls. After 10 min, art switches to `(._.)` (visual only). |
-| `inactive` | `(-_-)zzZ` | gray | Inactive | Waiting for 60+ minutes continuously |
+| `waiting` | `(·‿·)` | white | Waiting | `✻` completion summary after last `⏺`, or content unchanged for 2+ polls |
 | `active` | `(^_^)♪` | cyan | Working | Last `⏺` line is text (responding) or fallback |
 | `thinking` | `(o.o)...` | cyan | Thinking | Active spinner (`✢✳✽`) on screen, or last `⏺` line matches `Thinking...` |
 | `reading` | `(o_o) ` | cyan | Reading | `⏺ Read(path)` or `⏺ Read N files` on screen |
@@ -44,8 +43,3 @@ Two mechanisms detect waiting state:
 
 Note: The `❯` prompt alone cannot indicate waiting state (it is always visible, even while Claude is working). It is only used as a waiting signal when it appears *after* a `⏺` text response line with no active content in between.
 
-## Inactivity Detection
-
-If `lastActivityAt` shows the session has been in `waiting` state for 60+ minutes, it transitions to `inactive`.
-
-The `waiting` state's visual art switches from `(·‿·)` to `(._.)` after 10 minutes (`BORED_ART_MS` in `characters.ts`), but this is purely cosmetic — it is not a separate state.

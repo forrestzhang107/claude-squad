@@ -21,8 +21,7 @@ export function formatDuration(ms: number): string {
 
 export function AgentCard({session, width, selected}: AgentCardProps) {
   const now = Date.now();
-  const waitingDuration = session.activity === 'waiting' ? now - session.lastActivityAt : 0;
-  const character = getCharacter(session.activity, waitingDuration);
+  const character = getCharacter(session.activity);
   const color = getActivityColor(session.activity);
   const duration = session.processStartedAt ? formatDuration(now - session.processStartedAt) : '';
 

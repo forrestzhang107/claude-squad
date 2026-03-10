@@ -413,7 +413,6 @@ function mapToolToState(toolName: string, args: string): { activity: AgentActivi
   }
 }
 
-export const INACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 60m waiting → inactive
 const GIT_REFRESH_INTERVAL = 30; // refresh git branch every N polls (~60s at 2s poll)
 /** Polls with unchanged content before "active" (responding) → "waiting". */
 export const STABLE_CONTENT_THRESHOLD = 2;
@@ -499,12 +498,6 @@ export function pollSessions(
     const now = deps.now();
     const stateChanged = !prev || prev.activity !== activity || prev.statusText !== statusText;
     const lastActivityAt = stateChanged ? now : prev.lastActivityAt;
-
-    // Inactive transition: waiting for 60+ minutes → inactive
-    if (activity === 'waiting' && now - lastActivityAt > INACTIVE_TIMEOUT_MS) {
-      activity = 'inactive';
-      statusText = 'Inactive';
-    }
 
     // Git branch: cached, refreshed every ~60s
     const gitBranch = (refreshGit || !prev)

@@ -10,9 +10,9 @@ claude-squad 3 sessions | q to quit
 ╭──────────────────────────────────────╮ ╭──────────────────────────────────────╮ ╭──────────────────────────────────────╮
 │ telvana-api (staging)                │ │ claude-squad (main)                  │ │ telvana-ui (develop)                 │
 │                                      │ │                                      │ │                                      │
-│              (*_*)~                  │ │              (^_^)/                  │ │               (-_-)zzZ               │
+│              (*_*)~                  │ │              (^_^)/                  │ │               (·‿·)                  │
 │                                      │ │                                      │ │                                      │
-│ Editing service.ts                   │ │ $ npm run build 2>&1                 │ │ Inactive                             │
+│ Editing service.ts                   │ │ $ npm run build 2>&1                 │ │ Waiting for input                    │
 │ Session: 5m                          │ │ Session: 12m                         │ │ Session: 44m                         │
 ╰──────────────────────────────────────╯ ╰──────────────────────────────────────╯ ╰──────────────────────────────────────╯
 ```
@@ -55,7 +55,6 @@ Each agent card shows:
 | `(^_^)/` | Running | Executing commands |
 | `(o_o)?` | Searching | Searching codebase or web |
 | `(o_o)!` | Blocked | Needs your permission |
-| `(-_-)zzZ` | Sleeping | Inactive for 60+ minutes |
 
 ## How It Works
 

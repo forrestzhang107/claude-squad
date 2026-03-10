@@ -60,10 +60,6 @@ Single 2-second interval in Dashboard:
 5. Diff against previous state to update `lastActivityAt`
 6. Git branch refreshed every ~60s (not every poll)
 
-## Inactive Detection
-
-If a session has been in `waiting` state for 60+ minutes continuously, it transitions to `inactive`.
-
 ## Git Branch
 
 Fetched via `git branch --show-current` using the process CWD. Cached between polls and refreshed every ~60 seconds.

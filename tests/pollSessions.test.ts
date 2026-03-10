@@ -2,7 +2,6 @@ import {describe, test, expect, beforeEach} from 'vitest';
 import {
   pollSessions,
   resetPollerState,
-  INACTIVE_TIMEOUT_MS,
   STABLE_CONTENT_THRESHOLD,
 } from '../src/poller.js';
 import type {ClaudeProcess, PollDeps} from '../src/poller.js';
@@ -145,62 +144,6 @@ describe('pollSessions', () => {
       result = pollSessions(prevMap(result), deps);
     }
     expect(result[0].activity).toBe('running');
-  });
-
-  // --- Inactive timeout ---
-
-  test('inactive: waiting session becomes inactive after timeout', () => {
-    const proc = makeProc();
-    const waitingContent = lines('⏺ Done.', '', '✻ Worked for 10s');
-    const contents = new Map([[proc.tty, waitingContent]]);
-
-    let currentTime = Date.now();
-    const deps = makeDeps({
-      processes: [proc],
-      contents,
-      now: () => currentTime,
-    });
-
-    // Poll 1: waiting
-    let result = pollSessions(new Map(), deps);
-    expect(result[0].activity).toBe('waiting');
-
-    // Advance time past the timeout
-    currentTime += INACTIVE_TIMEOUT_MS + 1;
-
-    // Poll 2: should transition to inactive
-    result = pollSessions(prevMap(result), deps);
-    expect(result[0].activity).toBe('inactive');
-    expect(result[0].statusText).toBe('Inactive');
-  });
-
-  test('inactive: does NOT trigger if activity changes before timeout', () => {
-    const proc = makeProc();
-    const waitingContent = lines('⏺ Done.', '', '✻ Worked for 10s');
-    const activeContent = lines('⏺ Starting new work now.');
-
-    let currentTime = Date.now();
-    let contents = new Map([[proc.tty, waitingContent]]);
-    const deps = makeDeps({
-      processes: [proc],
-      readTerminalContents: () => contents,
-      now: () => currentTime,
-    });
-
-    // Poll 1: waiting
-    let result = pollSessions(new Map(), deps);
-    expect(result[0].activity).toBe('waiting');
-
-    // Advance partway, then change to active
-    currentTime += INACTIVE_TIMEOUT_MS / 2;
-    contents = new Map([[proc.tty, activeContent]]);
-    result = pollSessions(prevMap(result), deps);
-    expect(result[0].activity).toBe('active');
-
-    // Advance past original timeout — should NOT be inactive (timer reset)
-    currentTime += INACTIVE_TIMEOUT_MS / 2 + 1;
-    result = pollSessions(prevMap(result), deps);
-    expect(result[0].activity).not.toBe('inactive');
   });
 
   // --- Git branch caching ---

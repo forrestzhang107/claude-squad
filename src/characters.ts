@@ -5,16 +5,10 @@ interface CharacterFrame {
   label: string;
 }
 
-const BORED_ART_MS = 10 * 60 * 1000; // 10 minutes
-
 const characters: Record<AgentActivity, CharacterFrame> = {
   waiting: {
     art: '(·‿·)',
     label: 'Waiting',
-  },
-  inactive: {
-    art: '(-_-)zzZ',
-    label: 'Inactive',
   },
   active: {
     art: '(^_^)♪',
@@ -50,15 +44,7 @@ const characters: Record<AgentActivity, CharacterFrame> = {
   },
 };
 
-const boredFrame: CharacterFrame = {
-  art: '(._.)',
-  label: 'Waiting',
-};
-
-export function getCharacter(activity: AgentActivity, waitingDurationMs = 0): CharacterFrame {
-  if (activity === 'waiting' && waitingDurationMs > BORED_ART_MS) {
-    return boredFrame;
-  }
+export function getCharacter(activity: AgentActivity): CharacterFrame {
   return characters[activity];
 }
 
@@ -66,13 +52,12 @@ export function getActivityColor(activity: AgentActivity): string {
   switch (activity) {
     case 'waiting':
       return 'white';
-    case 'inactive':
-      return 'gray';
     case 'active':
     case 'thinking':
     case 'reading':
       return 'cyan';
     case 'editing':
+    case 'question':
       return 'yellow';
     case 'running':
       return 'green';
@@ -80,7 +65,5 @@ export function getActivityColor(activity: AgentActivity): string {
       return 'magenta';
     case 'permission':
       return 'red';
-    case 'question':
-      return 'yellow';
   }
 }
