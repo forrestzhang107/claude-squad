@@ -237,3 +237,62 @@ function mapToolToState(toolName: string, args: string): TerminalState {
       return {activity: 'active', statusText: `Using ${toolName}`};
   }
 }
+
+const INACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 60m waiting → inactive
+const GIT_REFRESH_INTERVAL = 30; // refresh git branch every N polls (~60s at 2s poll)
+
+let gitRefreshCounter = 0;
+
+/**
+ * Main poll function. Discovers running Claude processes, reads their
+ * terminal content, and returns current session states.
+ */
+export function pollSessions(previous: Map<number, AgentSession>): AgentSession[] {
+  const processes = discoverProcesses();
+  if (processes.length === 0) return [];
+
+  const ttys = processes.map((p) => p.tty);
+  const contents = readTerminalContents(ttys);
+  const refreshGit = ++gitRefreshCounter >= GIT_REFRESH_INTERVAL;
+  if (refreshGit) gitRefreshCounter = 0;
+
+  const sessions: AgentSession[] = [];
+
+  for (const proc of processes) {
+    const content = contents.get(proc.tty) || '';
+    let {activity, statusText} = parseTerminalState(content);
+
+    const prev = previous.get(proc.pid);
+
+    // Preserve lastActivityAt if state hasn't meaningfully changed
+    const stateChanged = !prev || prev.activity !== activity || prev.statusText !== statusText;
+    const lastActivityAt = stateChanged ? Date.now() : prev.lastActivityAt;
+
+    // Inactive transition: waiting for 60+ minutes → inactive
+    if (activity === 'waiting' && Date.now() - lastActivityAt > INACTIVE_TIMEOUT_MS) {
+      activity = 'inactive';
+      statusText = 'Inactive';
+    }
+
+    // Git branch: cached, refreshed every ~60s
+    const gitBranch = (refreshGit || !prev)
+      ? getGitBranch(proc.cwd)
+      : prev.gitBranch;
+
+    sessions.push({
+      pid: proc.pid,
+      tty: proc.tty,
+      processStartedAt: proc.startTime,
+      projectName: extractProjectName(proc.cwd),
+      workingDirectory: proc.cwd,
+      gitBranch,
+      activity,
+      statusText,
+      lastActivityAt,
+    });
+  }
+
+  // Sort by process start time (oldest first)
+  sessions.sort((a, b) => a.processStartedAt - b.processStartedAt);
+  return sessions;
+}
