@@ -93,6 +93,65 @@ describe('parseTerminalState', () => {
     expect(state.activity).toBe('waiting');
   });
 
+  // --- Question detection (AskUserQuestion) ---
+
+  test('detects AskUserQuestion UI as question state', () => {
+    const content = lines(
+      '⏺ Bash(ls .worktrees/ 2>/dev/null; echo "---"; git worktree list)',
+      '  ⎿  agent-navigation',
+      '     robust-session-mapping',
+      '     updown-nav',
+      '',
+      '──────────────────────────────────────',
+      ' ☐ Branch name',
+      '',
+      ' What should the new branch be named?',
+      '',
+      ' ❯ 1. feature/...',
+      '       I\'ll type a feature branch name',
+      '   2. fix/...',
+      '       I\'ll type a bugfix branch name',
+      '   3. refactor/...',
+      '       I\'ll type a refactor branch name',
+      '   4. Type something.',
+      '──────────────────────────────────────',
+      '   5. Chat about this',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('question');
+    expect(state.statusText).toBe('Asking question');
+  });
+
+  test('question takes priority over tool active', () => {
+    const content = lines(
+      '⏺ Agent(Explore the codebase)',
+      '  ⎿  Running…',
+      '',
+      ' ☐ Approach',
+      ' Which approach should we use?',
+      ' ❯ 1. Option A',
+      '   2. Option B',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('question');
+  });
+
+  test('does NOT trigger question for "Enter to select" in diff output', () => {
+    const content = lines(
+      '⏺ Update(tests/poller.test.ts)',
+      '  ⎿  Added 10 lines',
+      "      100 +      'Enter to select · ↑/↓ to navigate · Esc to cancel',",
+      '',
+      '⏺ All tests pass.',
+      '',
+      '✻ Brewed for 30s',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('waiting');
+  });
+
   // --- Waiting detection ---
   // Note: Claude Code's ❯ prompt is always visible at the bottom of the terminal,
   // even while actively working. We use ✻ completion summaries (e.g. "✻ Brewed for 2m")

@@ -7,7 +7,7 @@ import type {AgentActivity} from '../src/types.js';
 describe('getCharacter', () => {
   const allActivities: AgentActivity[] = [
     'waiting', 'inactive', 'active', 'thinking',
-    'reading', 'editing', 'running', 'searching', 'permission',
+    'reading', 'editing', 'running', 'searching', 'permission', 'question',
   ];
 
   it('returns a frame for every activity', () => {
@@ -49,6 +49,7 @@ describe('getCharacter', () => {
     expect(getCharacter('running').art).toBe('(·_·)>_');
     expect(getCharacter('searching').art).toBe('(o_o)?');
     expect(getCharacter('permission').art).toBe('(>_<)!');
+    expect(getCharacter('question').art).toBe('(·_·)?');
   });
 });
 
@@ -85,10 +86,14 @@ describe('getActivityColor', () => {
     expect(getActivityColor('permission')).toBe('red');
   });
 
+  it('maps question to yellow', () => {
+    expect(getActivityColor('question')).toBe('yellow');
+  });
+
   it('returns a value for every activity type', () => {
     const activities: AgentActivity[] = [
       'waiting', 'inactive', 'active', 'thinking',
-      'reading', 'editing', 'running', 'searching', 'permission',
+      'reading', 'editing', 'running', 'searching', 'permission', 'question',
     ];
     for (const a of activities) {
       expect(getActivityColor(a)).toBeTruthy();

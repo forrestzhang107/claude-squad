@@ -13,12 +13,14 @@
 | `running` | `(·_·)>_` | green | Running | `⏺ Bash(cmd)`, `⏺ Agent(...)`, or `⏺ Task(...)` on screen |
 | `searching` | `(o_o)?` | magenta | Searching | `⏺ Glob(...)`, `⏺ Grep(...)`, `⏺ Explore(...)`, `⏺ WebFetch(...)`, `⏺ WebSearch(...)`, or `⏺ Searched for N patterns` on screen |
 | `permission` | `(>_<)!` | red | Blocked | `Allow ToolName(args)?` visible on terminal screen |
+| `question` | `(·_·)?` | yellow | Question | `AskUserQuestion` UI visible (`Enter to select · ↑/↓ to navigate`) |
 
 ## State Detection
 
 States are detected by reading terminal history via AppleScript (`history of tab`, last 3000 chars). Detection is priority-ordered:
 
 1. **Permission** — `Allow ToolName(args)?` pattern in last 2000 chars
+1b. **Question** — `Enter to select · ↑/↓ to navigate` in last 2000 chars (AskUserQuestion UI)
 2. **Active spinner** — `✢✳✽` (Dingbat asterisks) followed by text (e.g. `✳ Hatching…`)
 3. **Completion** — `✻ <verb> for <duration>` after last `⏺` line → waiting
 4. **Thinking** — Last `⏺` line matches `Thinking...`

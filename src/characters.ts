@@ -44,6 +44,10 @@ const characters: Record<AgentActivity, CharacterFrame> = {
     art: '(>_<)!',
     label: 'Blocked',
   },
+  question: {
+    art: '(·_·)?',
+    label: 'Question',
+  },
 };
 
 const boredFrame: CharacterFrame = {
@@ -76,5 +80,7 @@ export function getActivityColor(activity: AgentActivity): string {
       return 'magenta';
     case 'permission':
       return 'red';
+    case 'question':
+      return 'yellow';
   }
 }

@@ -7,6 +7,7 @@ export type AgentActivity =
   | 'running'
   | 'searching'
   | 'permission'
+  | 'question'
   | 'thinking';
 
 export interface AgentSession {

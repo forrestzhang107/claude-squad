@@ -151,6 +151,9 @@ const PERMISSION_RE = /Allow \w[\w:.-]*\(.*?\)\?/;
 // Newer Claude Code permission format: "Do you want to proceed?" followed by
 // "❯ 1. Yes" selector within a few lines (not inside quoted strings/diffs)
 const PERMISSION_PROCEED_RE = /Do you want to proceed\?\s*\n\s*❯ 1\. Yes/;
+// AskUserQuestion UI: shows numbered options with "Enter to select · ↑/↓ to navigate"
+// Line-anchored (multiline) to avoid matching when this text appears inside diffs/quotes
+const QUESTION_RE = /^\s*Enter to select · ↑\/↓ to navigate/m;
 const TOOL_LINE_RE = /^⏺ (\w[\w:.-]*)\((.*)?\)\s*$/;
 const THINKING_RE = /^⏺ Thinking[.…]/;
 const COLLAPSED_SEARCH_RE = /^⏺ Searched for \d+ pattern/;
@@ -192,6 +195,11 @@ export function parseTerminalState(content: string): TerminalState {
 
   if (PERMISSION_RE.test(tail) || PERMISSION_PROCEED_RE.test(tail)) {
     return {activity: 'permission', statusText: 'Needs permission', ...conversation};
+  }
+
+  // 1b. Question — AskUserQuestion UI visible (check tail)
+  if (QUESTION_RE.test(tail)) {
+    return {activity: 'question', statusText: 'Asking question', ...conversation};
   }
 
   // 2. Scan backwards for key markers.
