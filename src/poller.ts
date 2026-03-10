@@ -369,7 +369,7 @@ function parseConversation(lines: string[]): { lastPrompt: string; lastResponse:
   }
   responseLines.reverse();
 
-  return { lastPrompt, lastResponse: responseLines.slice(-RESPONSE_LINES) };
+  return { lastPrompt, lastResponse: responseLines.slice(0, RESPONSE_LINES) };
 }
 
 function mapToolToState(toolName: string, args: string): { activity: AgentActivity; statusText: string } {

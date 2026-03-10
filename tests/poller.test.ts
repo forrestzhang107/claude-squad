@@ -448,8 +448,11 @@ describe('parseTerminalState', () => {
       '❯ ',
     );
     const state = parseTerminalState(content);
-    expect(state.lastResponse).toHaveLength(3);
-    expect(state.lastResponse[2]).toBe('Line five.');
+    expect(state.lastResponse).toEqual([
+      'Line one.',
+      'Line two.',
+      'Line three.',
+    ]);
   });
 
   test('returns empty response when only tool calls exist', () => {

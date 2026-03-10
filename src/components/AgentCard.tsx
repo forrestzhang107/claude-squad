@@ -52,8 +52,8 @@ export function AgentCard({session, width, selected}: AgentCardProps) {
       ) : null}
 
       {session.lastPrompt ? (
-        <Box marginTop={1} height={2} overflow="hidden">
-          <Text wrap="wrap">&gt; {session.lastPrompt}</Text>
+        <Box marginTop={1}>
+          <Text wrap="truncate">&gt; {session.lastPrompt}</Text>
         </Box>
       ) : null}
       {session.lastResponse.length > 0 ? (
