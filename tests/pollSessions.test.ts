@@ -199,6 +199,78 @@ describe('pollSessions', () => {
     expect(result).toHaveLength(2);
   });
 
+  test('caches lastResponse across polls when response is not in current content', () => {
+    const proc = makeProc();
+    // Poll 1: terminal has a response
+    const contents1 = new Map([[proc.tty, lines(
+      '❯ fix the bug',
+      '⏺ The bug is in auth.ts.',
+      '✻ Worked for 10s',
+      '❯ ',
+    )]]);
+    const deps1 = makeDeps({processes: [proc], contents: contents1});
+    let result = pollSessions(new Map(), deps1);
+    expect(result[0].lastResponse).toEqual(['The bug is in auth.ts.']);
+
+    // Poll 2: response scrolled out, only tool calls visible
+    const contents2 = new Map([[proc.tty, lines(
+      '⏺ Edit(src/auth.ts)',
+      '  ⎿  Updated 1 line',
+    )]]);
+    const deps2 = makeDeps({processes: [proc], contents: contents2});
+    result = pollSessions(prevMap(result), deps2);
+    expect(result[0].lastResponse).toEqual(['The bug is in auth.ts.']);
+  });
+
+  test('clears lastResponse when a new prompt is submitted', () => {
+    const proc = makeProc();
+    // Poll 1: response from first prompt
+    const contents1 = new Map([[proc.tty, lines(
+      '❯ fix the bug',
+      '⏺ The bug is in auth.ts.',
+      '✻ Worked for 10s',
+      '❯ ',
+    )]]);
+    const deps1 = makeDeps({processes: [proc], contents: contents1});
+    let result = pollSessions(new Map(), deps1);
+    expect(result[0].lastResponse).toEqual(['The bug is in auth.ts.']);
+
+    // Poll 2: new prompt submitted, agent is working (no response yet)
+    const contents2 = new Map([[proc.tty, lines(
+      '❯ now add tests',
+      '⏺ Read(src/auth.ts)',
+      '  ⎿  [file contents]',
+    )]]);
+    const deps2 = makeDeps({processes: [proc], contents: contents2});
+    result = pollSessions(prevMap(result), deps2);
+    expect(result[0].lastPrompt).toBe('now add tests');
+    expect(result[0].lastResponse).toEqual([]);
+  });
+
+  test('updates cached response when new response arrives', () => {
+    const proc = makeProc();
+    // Poll 1: first response
+    const contents1 = new Map([[proc.tty, lines(
+      '❯ fix the bug',
+      '⏺ Found the issue.',
+      '✻ Worked for 10s',
+      '❯ ',
+    )]]);
+    const deps1 = makeDeps({processes: [proc], contents: contents1});
+    let result = pollSessions(new Map(), deps1);
+    expect(result[0].lastResponse).toEqual(['Found the issue.']);
+
+    // Poll 2: new response visible
+    const contents2 = new Map([[proc.tty, lines(
+      '⏺ All fixed now.',
+      '✻ Worked for 20s',
+      '❯ ',
+    )]]);
+    const deps2 = makeDeps({processes: [proc], contents: contents2});
+    result = pollSessions(prevMap(result), deps2);
+    expect(result[0].lastResponse).toEqual(['All fixed now.']);
+  });
+
   test('caches lastPrompt across polls when prompt leaves history window', () => {
     const proc = makeProc();
     // Poll 1: terminal has a visible prompt

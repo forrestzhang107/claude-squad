@@ -158,6 +158,9 @@ const TOOL_LINE_RE = /^⏺ (\w[\w:.-]*)\((.*)?\)\s*$/;
 const THINKING_RE = /^⏺ Thinking[.…]/;
 const COLLAPSED_SEARCH_RE = /^⏺ Searched for \d+ pattern/;
 const COLLAPSED_READ_RE = /^⏺ Read \d+ files?\b/;
+// Collapsed tool summaries that aren't plain-text response:
+// ⏺ Wrote 3 files, ⏺ Edited 2 files, ⏺ Updated 5 files, ⏺ Agent "desc" completed
+const COLLAPSED_TOOL_RE = /^⏺ (?:(?:Wrote|Edited|Updated) \d+ files?\b|Agent ["'])/;
 // Active spinner: non-ASCII char followed by a verb ending in … (unicode ellipsis).
 // e.g. "✳ Wandering… (1m 14s · ↓ 896 tokens)", "✢ Tomfoolering… (54s)"
 // Claude Code animates through many spinner characters — match the pattern, not the char.
@@ -319,10 +322,11 @@ function isResponseBoundary(trimmed: string): boolean {
   return trimmed.startsWith('❯') || COMPLETION_RE.test(trimmed) || ACTIVE_SPINNER_RE.test(trimmed);
 }
 
-/** Lines that are tool invocations (not plain-text response). */
+/** Lines that are tool invocations or tool notifications (not plain-text response). */
 function isToolBullet(trimmed: string): boolean {
   return TOOL_LINE_RE.test(trimmed) || THINKING_RE.test(trimmed) ||
-    COLLAPSED_SEARCH_RE.test(trimmed) || COLLAPSED_READ_RE.test(trimmed);
+    COLLAPSED_SEARCH_RE.test(trimmed) || COLLAPSED_READ_RE.test(trimmed) ||
+    COLLAPSED_TOOL_RE.test(trimmed);
 }
 
 /** Extract the user's latest prompt and agent's latest text response from terminal content. */
@@ -422,12 +426,14 @@ export interface PollerState {
   gitRefreshCounter: number;
   contentFingerprints: Map<number, { tail: string; stableCount: number }>;
   lastKnownPrompts: Map<number, string>;
+  lastKnownResponses: Map<number, string[]>;
 }
 
 const pollerState: PollerState = {
   gitRefreshCounter: 0,
   contentFingerprints: new Map(),
   lastKnownPrompts: new Map(),
+  lastKnownResponses: new Map(),
 };
 
 /** Reset mutable poller state. For testing only. */
@@ -435,6 +441,7 @@ export function resetPollerState(): void {
   pollerState.gitRefreshCounter = 0;
   pollerState.contentFingerprints.clear();
   pollerState.lastKnownPrompts.clear();
+  pollerState.lastKnownResponses.clear();
 }
 
 /** Dependency injection for pollSessions, enabling unit tests. */
@@ -504,7 +511,20 @@ export function pollSessions(
       ? deps.getGitBranch(proc.cwd)
       : prev.gitBranch;
 
-    if (lastPrompt) pollerState.lastKnownPrompts.set(proc.pid, lastPrompt);
+    // Cache prompt and response across polls so they survive when content
+    // scrolls out of the terminal history window.  Clear the cached response
+    // whenever a new prompt arrives (the old response is stale).
+    const cachedPrompt = pollerState.lastKnownPrompts.get(proc.pid);
+    if (lastPrompt) {
+      if (lastPrompt !== cachedPrompt) {
+        pollerState.lastKnownResponses.delete(proc.pid);
+      }
+      pollerState.lastKnownPrompts.set(proc.pid, lastPrompt);
+    }
+    if (lastResponse.length > 0) {
+      pollerState.lastKnownResponses.set(proc.pid, lastResponse);
+    }
+
     sessions.push({
       pid: proc.pid,
       tty: proc.tty,
@@ -515,17 +535,21 @@ export function pollSessions(
       activity,
       statusText,
       lastActivityAt,
-      lastPrompt: lastPrompt || pollerState.lastKnownPrompts.get(proc.pid) || '',
-      lastResponse,
+      lastPrompt: pollerState.lastKnownPrompts.get(proc.pid) || '',
+      lastResponse: pollerState.lastKnownResponses.get(proc.pid) || [],
     });
   }
 
   // Clean up state for dead processes
-  for (const pid of pollerState.contentFingerprints.keys()) {
-    if (!activePids.has(pid)) pollerState.contentFingerprints.delete(pid);
-  }
-  for (const pid of pollerState.lastKnownPrompts.keys()) {
-    if (!activePids.has(pid)) pollerState.lastKnownPrompts.delete(pid);
+  const stateMaps = [
+    pollerState.contentFingerprints,
+    pollerState.lastKnownPrompts,
+    pollerState.lastKnownResponses,
+  ];
+  for (const map of stateMaps) {
+    for (const pid of map.keys()) {
+      if (!activePids.has(pid)) map.delete(pid);
+    }
   }
 
   // Sort by process start time (oldest first)

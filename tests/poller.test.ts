@@ -513,6 +513,40 @@ describe('parseTerminalState', () => {
     ]);
   });
 
+  // --- Agent notification filtering from lastResponse ---
+
+  test('skips Agent notification and shows prior text response', () => {
+    const content = lines(
+      '⏺ Code reviewer confirmed everything is clean.',
+      '⏺ Agent "Simplify changed code" completed',
+      '✳ Thinking… (12s)',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual(['Code reviewer confirmed everything is clean.']);
+  });
+
+  test('skips Agent notification with single quotes', () => {
+    const content = lines(
+      '⏺ Here is the summary.',
+      "⏺ Agent 'Review code' completed",
+      '✻ Worked for 30s',
+      '❯ ',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual(['Here is the summary.']);
+  });
+
+  test('skips collapsed write/edit summaries from response', () => {
+    const content = lines(
+      '⏺ Fixed the formatting issues.',
+      '⏺ Edited 3 files',
+      '✻ Worked for 15s',
+      '❯ ',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual(['Fixed the formatting issues.']);
+  });
+
   // --- Tool sub-output filtering from lastResponse ---
 
   test('omits tool sub-output between tool call and response', () => {
