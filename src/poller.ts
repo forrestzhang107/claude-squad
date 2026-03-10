@@ -87,9 +87,13 @@ export function getGitBranch(cwd: string): string {
   }
 }
 
+/** How many characters from the end of terminal history to read. */
+const HISTORY_TAIL_CHARS = 3000;
+
 /**
- * Batch-read visible terminal content for given TTYs from Terminal.app.
- * Uses `contents of tab` (visible screen only, not scrollback history).
+ * Batch-read recent terminal output for given TTYs from Terminal.app.
+ * Uses `history of tab` and takes only the last HISTORY_TAIL_CHARS characters
+ * to keep data transfer small and focus on current state.
  */
 export function readTerminalContents(ttys: string[]): Map<string, string> {
   const contents = new Map<string, string>();
@@ -106,7 +110,12 @@ export function readTerminalContents(ttys: string[]): Map<string, string> {
           repeat with t in tabs of w
             set ttyName to tty of t
             if ttyList contains ttyName then
-              set output to output & ttyName & "${SEPARATOR}" & (contents of t) & "${SEPARATOR}${SEPARATOR}"
+              set h to history of t
+              set hLen to length of h
+              if hLen > ${HISTORY_TAIL_CHARS} then
+                set h to text (hLen - ${HISTORY_TAIL_CHARS - 1}) thru hLen of h
+              end if
+              set output to output & ttyName & "${SEPARATOR}" & h & "${SEPARATOR}${SEPARATOR}"
             end if
           end repeat
         end repeat
@@ -116,8 +125,8 @@ export function readTerminalContents(ttys: string[]): Map<string, string> {
     const raw = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5000,
-      maxBuffer: 1024 * 1024,
+      timeout: 10000,
+      maxBuffer: 10 * 1024 * 1024, // 10MB — history can be large even when trimmed
     });
 
     for (const chunk of raw.split(`${SEPARATOR}${SEPARATOR}`)) {
@@ -135,8 +144,19 @@ export function readTerminalContents(ttys: string[]): Map<string, string> {
 }
 
 const PERMISSION_RE = /Allow \w[\w:.-]*\(.*?\)\?/;
+// Newer Claude Code permission format: "Do you want to proceed?" followed by
+// "❯ 1. Yes" selector within a few lines (not inside quoted strings/diffs)
+const PERMISSION_PROCEED_RE = /Do you want to proceed\?\s*\n\s*❯ 1\. Yes/;
 const TOOL_LINE_RE = /^⏺ (\w[\w:.-]*)\((.*)?\)\s*$/;
 const THINKING_RE = /^⏺ Thinking[.…]/;
+const COLLAPSED_SEARCH_RE = /^⏺ Searched for \d+ pattern/;
+const COLLAPSED_READ_RE = /^⏺ Read \d+ files?\b/;
+// Active spinner: non-ASCII char followed by a verb ending in … (unicode ellipsis).
+// e.g. "✳ Wandering… (1m 14s · ↓ 896 tokens)", "✢ Tomfoolering… (54s)"
+// Claude Code animates through many spinner characters — match the pattern, not the char.
+const ACTIVE_SPINNER_RE = /^[^\x00-\x7F] \w+\u2026/;
+// ✻ completion summary: "✻ Brewed for 2m 1s", "✻ Sautéed for 52s", "✻ Worked for 44s"
+const COMPLETION_RE = /^✻ .+ for \d/;
 const BASH_CMD_MAX = 40;
 
 interface TerminalState {
@@ -144,7 +164,14 @@ interface TerminalState {
   statusText: string;
 }
 
-/** Parse visible terminal content into an activity state. */
+/**
+ * Parse visible terminal content into an activity state.
+ *
+ * Key insight: Claude Code's ❯ prompt is ALWAYS visible at the bottom of the
+ * terminal, even while actively working. We cannot use ❯ position to detect
+ * waiting state. Instead, we use ✻ (completion summary like "✻ Brewed for 2m")
+ * as the reliable "done" marker — it appears after every response cycle.
+ */
 export function parseTerminalState(content: string): TerminalState {
   if (!content || !content.trim()) {
     return {activity: 'waiting', statusText: 'Waiting for input'};
@@ -152,63 +179,97 @@ export function parseTerminalState(content: string): TerminalState {
 
   // 1. Permission — highest priority (check last 2000 chars)
   const tail = content.slice(-2000);
-  if (PERMISSION_RE.test(tail)) {
+  if (PERMISSION_RE.test(tail) || PERMISSION_PROCEED_RE.test(tail)) {
     return {activity: 'permission', statusText: 'Needs permission'};
   }
 
-  // 2. Waiting — Claude's input prompt at end of screen
-  const lastLines = tail.split('\n').slice(-5);
-  if (lastLines.some((line) => /^>\s*$/.test(line))) {
-    return {activity: 'waiting', statusText: 'Waiting for input'};
-  }
-
-  // 3. Find the last ⏺ line to determine current activity
+  // 2. Scan backwards for key markers.
+  //    ⏺ = tool call or response line
+  //    ✻ = completion summary (Claude finished a response cycle)
+  //    ✢ = active spinner (Claude is thinking/working)
   const allLines = content.split('\n');
+  let lastBulletIdx = -1;
+  let lastCompletionIdx = -1;
   let lastToolLine: RegExpMatchArray | null = null;
   let lastBulletIsText = false;
   let lastBulletIsThinking = false;
+  let lastBulletIsSearch = false;
+  let lastBulletIsRead = false;
+  let activeSpinnerIdx = -1;
 
   for (let i = allLines.length - 1; i >= 0; i--) {
     const line = allLines[i].trim();
-    if (!line.startsWith('⏺')) continue;
 
-    // Check for thinking indicator
-    if (THINKING_RE.test(line)) {
-      lastBulletIsThinking = true;
-      break;
+    // Track ✻ completion summary (e.g. "✻ Churned for 1m 29s")
+    if (lastCompletionIdx === -1 && COMPLETION_RE.test(line)) {
+      lastCompletionIdx = i;
     }
 
-    const toolMatch = line.match(TOOL_LINE_RE);
-    if (toolMatch) {
-      lastToolLine = toolMatch;
-      break;
+    // Track ✢ active spinner (e.g. "✢ Tomfoolering… (54s · ↓ 185 tokens)")
+    if (activeSpinnerIdx === -1 && ACTIVE_SPINNER_RE.test(line)) {
+      activeSpinnerIdx = i;
     }
-    // It's a ⏺ line but not a tool invocation — it's response text
-    if (line.length > 2) {
-      lastBulletIsText = true;
-      break;
+
+    if (line.startsWith('⏺') && lastBulletIdx === -1) {
+      lastBulletIdx = i;
+
+      if (THINKING_RE.test(line)) {
+        lastBulletIsThinking = true;
+      } else if (COLLAPSED_SEARCH_RE.test(line)) {
+        lastBulletIsSearch = true;
+      } else if (COLLAPSED_READ_RE.test(line)) {
+        lastBulletIsRead = true;
+      } else {
+        const toolMatch = line.match(TOOL_LINE_RE);
+        if (toolMatch) {
+          lastToolLine = toolMatch;
+        } else if (line.length > 2) {
+          lastBulletIsText = true;
+        }
+      }
     }
+
+    // Stop once we've found all three markers
+    if (lastBulletIdx !== -1 && lastCompletionIdx !== -1 && activeSpinnerIdx !== -1) break;
   }
 
-  // 4. Thinking — model is reasoning
+  // 3. ✢ active spinner is the most recent marker → Claude is thinking
+  if (activeSpinnerIdx !== -1 && activeSpinnerIdx > lastBulletIdx && activeSpinnerIdx > lastCompletionIdx) {
+    return {activity: 'thinking', statusText: 'Thinking...'};
+  }
+
+  // 4. ✻ completion summary after last ⏺ → Claude finished, waiting for input
+  if (lastCompletionIdx !== -1 && lastCompletionIdx > lastBulletIdx) {
+    return {activity: 'waiting', statusText: 'Waiting for input'};
+  }
+
+  // 5. Thinking — model is reasoning (⏺ Thinking...)
   if (lastBulletIsThinking) {
     return {activity: 'thinking', statusText: 'Thinking...'};
   }
 
-  // 5. Tool active — determine specific activity from tool name
+  // 6. Tool active — determine specific activity from tool name
   if (lastToolLine) {
     const toolName = lastToolLine[1];
     const args = lastToolLine[2] || '';
     return mapToolToState(toolName, args);
   }
 
-  // 6. Responding — last ⏺ line is text
+  // 7. Collapsed tool summaries (e.g. "⏺ Searched for 3 patterns")
+  if (lastBulletIsSearch) {
+    return {activity: 'searching', statusText: 'Searching'};
+  }
+  if (lastBulletIsRead) {
+    return {activity: 'reading', statusText: 'Reading files'};
+  }
+
+  // 8. Responding — last ⏺ line is text
   if (lastBulletIsText) {
     return {activity: 'active', statusText: 'Responding...'};
   }
 
-  // 7. Fallback — something is on screen but unclear
-  return {activity: 'active', statusText: 'Working...'};
+  // 9. No ⏺ content found — fresh session or just a prompt
+  return {activity: 'waiting', statusText: 'Waiting for input'};
 }
 
 function mapToolToState(toolName: string, args: string): TerminalState {
@@ -216,6 +277,7 @@ function mapToolToState(toolName: string, args: string): TerminalState {
     case 'Read':
       return {activity: 'reading', statusText: `Reading ${args}`};
     case 'Edit':
+    case 'Update':
       return {activity: 'editing', statusText: `Editing ${args}`};
     case 'Write':
       return {activity: 'editing', statusText: `Writing ${args}`};
@@ -230,6 +292,8 @@ function mapToolToState(toolName: string, args: string): TerminalState {
     case 'WebFetch':
     case 'WebSearch':
       return {activity: 'searching', statusText: 'Searching'};
+    case 'Explore':
+      return {activity: 'searching', statusText: 'Exploring codebase'};
     case 'Agent':
     case 'Task':
       return {activity: 'running', statusText: 'Running subtask'};
@@ -238,45 +302,99 @@ function mapToolToState(toolName: string, args: string): TerminalState {
   }
 }
 
-const INACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 60m waiting → inactive
+export const INACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 60m waiting → inactive
 const GIT_REFRESH_INTERVAL = 30; // refresh git branch every N polls (~60s at 2s poll)
+/** Polls with unchanged content before "active" (responding) → "waiting". */
+export const STABLE_CONTENT_THRESHOLD = 2;
 
-let gitRefreshCounter = 0;
+/** Mutable poller state. Exported for testing via resetPollerState(). */
+export interface PollerState {
+  gitRefreshCounter: number;
+  contentFingerprints: Map<number, { tail: string; stableCount: number }>;
+}
+
+const pollerState: PollerState = {
+  gitRefreshCounter: 0,
+  contentFingerprints: new Map(),
+};
+
+/** Reset mutable poller state. For testing only. */
+export function resetPollerState(): void {
+  pollerState.gitRefreshCounter = 0;
+  pollerState.contentFingerprints.clear();
+}
+
+/** Dependency injection for pollSessions, enabling unit tests. */
+export interface PollDeps {
+  discoverProcesses: () => ClaudeProcess[];
+  readTerminalContents: (ttys: string[]) => Map<string, string>;
+  getGitBranch: (cwd: string) => string;
+  now: () => number;
+}
+
+const defaultDeps: PollDeps = {
+  discoverProcesses,
+  readTerminalContents,
+  getGitBranch,
+  now: Date.now,
+};
 
 /**
  * Main poll function. Discovers running Claude processes, reads their
  * terminal content, and returns current session states.
  */
-export function pollSessions(previous: Map<number, AgentSession>): AgentSession[] {
-  const processes = discoverProcesses();
+export function pollSessions(
+  previous: Map<number, AgentSession>,
+  deps: PollDeps = defaultDeps,
+): AgentSession[] {
+  const processes = deps.discoverProcesses();
   if (processes.length === 0) return [];
 
   const ttys = processes.map((p) => p.tty);
-  const contents = readTerminalContents(ttys);
-  const refreshGit = ++gitRefreshCounter >= GIT_REFRESH_INTERVAL;
-  if (refreshGit) gitRefreshCounter = 0;
+  const contents = deps.readTerminalContents(ttys);
+  const refreshGit = ++pollerState.gitRefreshCounter >= GIT_REFRESH_INTERVAL;
+  if (refreshGit) pollerState.gitRefreshCounter = 0;
 
+  const activePids = new Set<number>();
   const sessions: AgentSession[] = [];
 
   for (const proc of processes) {
+    activePids.add(proc.pid);
     const content = contents.get(proc.tty) || '';
     let {activity, statusText} = parseTerminalState(content);
 
     const prev = previous.get(proc.pid);
 
+    // Content change detection: if "active" (responding) but content hasn't
+    // changed for STABLE_CONTENT_THRESHOLD polls, Claude likely finished and
+    // the ✻ completion marker was either absent or not captured.
+    const tail = content.slice(-500);
+    const fp = pollerState.contentFingerprints.get(proc.pid);
+    if (fp && fp.tail === tail) {
+      fp.stableCount++;
+    } else {
+      pollerState.contentFingerprints.set(proc.pid, { tail, stableCount: 0 });
+    }
+
+    if (activity === 'active' && (fp?.stableCount ?? 0) >= STABLE_CONTENT_THRESHOLD) {
+      activity = 'waiting';
+      statusText = 'Waiting for input';
+    }
+
     // Preserve lastActivityAt if state hasn't meaningfully changed
+    const now = deps.now();
     const stateChanged = !prev || prev.activity !== activity || prev.statusText !== statusText;
-    const lastActivityAt = stateChanged ? Date.now() : prev.lastActivityAt;
+    const lastActivityAt = stateChanged ? now : prev.lastActivityAt;
 
     // Inactive transition: waiting for 60+ minutes → inactive
-    if (activity === 'waiting' && Date.now() - lastActivityAt > INACTIVE_TIMEOUT_MS) {
+    if (activity === 'waiting' && now - lastActivityAt > INACTIVE_TIMEOUT_MS) {
       activity = 'inactive';
       statusText = 'Inactive';
     }
 
     // Git branch: cached, refreshed every ~60s
     const gitBranch = (refreshGit || !prev)
-      ? getGitBranch(proc.cwd)
+      ? deps.getGitBranch(proc.cwd)
       : prev.gitBranch;
 
     sessions.push({
@@ -290,6 +408,11 @@ export function pollSessions(previous: Map<number, AgentSession>): AgentSession[
       statusText,
       lastActivityAt,
     });
+  }
+
+  // Clean up fingerprints for dead processes
+  for (const pid of pollerState.contentFingerprints.keys()) {
+    if (!activePids.has(pid)) pollerState.contentFingerprints.delete(pid);
   }
 
   // Sort by process start time (oldest first)

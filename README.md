@@ -5,24 +5,16 @@
 If you run multiple Claude Code sessions across different projects, you know the pain: constantly switching terminals, forgetting which agent is stuck on a permission prompt, losing track of what each one is working on. claude-squad gives you a single terminal window that shows everything.
 
 ```
-claude-squad 4 sessions | q to quit
+claude-squad 3 sessions | q to quit
 
 ╭──────────────────────────────────────╮ ╭──────────────────────────────────────╮ ╭──────────────────────────────────────╮
 │ telvana-api (staging)                │ │ claude-squad (main)                  │ │ telvana-ui (develop)                 │
-│ fix the campaign tag aggregation     │ │ add permission timeout detection     │ │                                      │
-│                                      │ │                                      │ │               (-_-)zzZ               │
-│              (*_*)~                  │ │              (^_^)/                  │ │                                      │
-│                                      │ │                                      │ │ Inactive                             │
-│ Editing service.ts                   │ │ $ npm run build 2>&1                 │ │ Session: 44m                         │
-│ File: service.ts                     │ │ File: watcher.ts                     │ │                                      │
-│ Subagents: 1                         │ │ Session: 12m                         │ │ Recent:                              │
-│ Session: 5m                          │ │                                      │ │    Reading settings.json             │
-│                                      │ │ Recent:                              │ │  > Editing settings.json             │
-│ Recent:                              │ │    Reading parser.ts                 │ ╰──────────────────────────────────────╯
-│    Reading service.ts                │ │    Editing parser.ts                 │
-│    Searching codebase                │ │    Editing watcher.ts                │
-│  > Editing service.ts                │ │  > $ npm run build 2>&1              │
-╰──────────────────────────────────────╯ ╰──────────────────────────────────────╯
+│                                      │ │                                      │ │                                      │
+│              (*_*)~                  │ │              (^_^)/                  │ │               (-_-)zzZ               │
+│                                      │ │                                      │ │                                      │
+│ Editing service.ts                   │ │ $ npm run build 2>&1                 │ │ Inactive                             │
+│ Session: 5m                          │ │ Session: 12m                         │ │ Session: 44m                         │
+╰──────────────────────────────────────╯ ╰──────────────────────────────────────╯ ╰──────────────────────────────────────╯
 ```
 
 Zero config. No hooks. No API keys. Just run it.
@@ -45,14 +37,10 @@ That's it. It auto-discovers every running Claude Code session and starts showin
 
 Each agent card shows:
 
-- **Which repo** it's working in (auto-detected from file paths, not just where it was spawned)
+- **Which repo** it's working in (detected from the process working directory)
 - **What it's doing** -- reading, editing, running commands, thinking, searching
-- **What you asked it to do** -- extracts the task from your last prompt
 - **Git branch**
-- **Current file** being touched
-- **Subagent count** -- how many parallel agents it has running
 - **Session duration**
-- **Recent history** -- the last 4 tool calls
 - **Permission alerts** -- instantly see when an agent is blocked waiting for your approval (red border, `(o_o)!`)
 
 ## Agent Characters
@@ -67,21 +55,21 @@ Each agent card shows:
 | `(^_^)/` | Running | Executing commands |
 | `(o_o)?` | Searching | Searching codebase or web |
 | `(o_o)!` | Blocked | Needs your permission |
-| `(-_-)zzZ` | Sleeping | Inactive for 5+ minutes |
+| `(-_-)zzZ` | Sleeping | Inactive for 60+ minutes |
 
 ## How It Works
 
-claude-squad reads Claude Code's JSONL transcript files in `~/.claude/projects/`. It doesn't hook into Claude Code, inject anything, or use any API -- it's purely observational.
+claude-squad reads Terminal.app history for each running Claude Code session. It doesn't hook into Claude Code, inject anything, or use any API -- it's purely observational.
 
-- **Process matching** -- uses `ps` and `lsof` to find running Claude processes and match them to sessions
-- **Live tailing** -- polls transcript files every second for new activity
-- **Permission detection** -- if a tool hasn't produced output in 7 seconds, it flags it as likely waiting for approval
-- **Repo detection** -- figures out which repo each agent is actually working in by analyzing file paths from tool calls
+- **Process discovery** -- uses `ps` and `lsof` to find running Claude processes, their TTYs, and working directories
+- **Terminal reading** -- reads the last few thousand characters of terminal history via AppleScript and parses the visible state
+- **State detection** -- recognizes Claude Code's terminal markers (`⏺` tool calls, `✻` completion summaries, spinner characters) to determine what each agent is doing
+- **Permission detection** -- spots both `Allow Tool(args)?` and `Do you want to proceed?` permission prompts
 
 ## Requirements
 
 - Node.js >= 18
-- macOS (uses `ps` and `lsof` for process detection)
+- macOS (uses `ps`, `lsof`, and Terminal.app AppleScript)
 - Claude Code
 
 ## License

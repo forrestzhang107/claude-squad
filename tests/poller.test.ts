@@ -1,5 +1,6 @@
 import {describe, test, expect} from 'vitest';
 import {extractProjectName, parseTerminalState} from '../src/poller.js';
+import {lines} from './helpers.js';
 
 describe('extractProjectName', () => {
   test('returns basename of absolute path', () => {
@@ -50,23 +51,122 @@ describe('parseTerminalState', () => {
     expect(state.activity).toBe('permission');
   });
 
-  // --- Waiting detection ---
+  test('detects "Do you want to proceed?" permission format', () => {
+    const content = lines(
+      '⏺ Bash(cd /Users/forrest/repos/telvana && git status -s)',
+      '  ⎿  Running…',
+      '',
+      '──────────────────────────────────────',
+      ' Bash command',
+      '',
+      '   cd /Users/forrest/repos/telvana && git status -s',
+      '   Check UI repo status',
+      '',
+      ' Compound commands with cd and git require approval to prevent bare repository attacks',
+      '',
+      ' Do you want to proceed?',
+      ' ❯ 1. Yes',
+      '   2. No',
+      '',
+      ' Esc to cancel · Tab to amend · ctrl+e to explain',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('permission');
+    expect(state.statusText).toBe('Needs permission');
+  });
 
-  test('detects waiting state from Claude input prompt', () => {
+  test('does NOT trigger permission for "Do you want to proceed?" in diff output', () => {
+    // When Claude shows a diff containing test code with "Do you want to proceed?",
+    // it should NOT be classified as a permission prompt
+    const content = lines(
+      '⏺ Update(tests/real-tty.test.ts)',
+      '  ⎿  Added 27 lines',
+      '      362 +      \' Do you want to proceed?\',',
+      '      363 +      \' ❯ 1. Yes\',',
+      '      364 +      \'   2. No\',',
+      '',
+      '⏺ All 74 tests pass.',
+      '',
+      '✻ Brewed for 51s',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('waiting');
+  });
+
+  // --- Waiting detection ---
+  // Note: Claude Code's ❯ prompt is always visible at the bottom of the terminal,
+  // even while actively working. We use ✻ completion summaries (e.g. "✻ Brewed for 2m")
+  // as the reliable "done" marker instead.
+
+  test('detects waiting from ✻ completion summary after response', () => {
     const content = lines(
       '⏺ Done! The fix has been applied.',
       '',
-      '> ',
+      '✻ Worked for 30s',
     );
     const state = parseTerminalState(content);
     expect(state.activity).toBe('waiting');
     expect(state.statusText).toBe('Waiting for input');
   });
 
-  test('detects waiting with empty prompt line', () => {
-    const content = lines('⏺ All done.', '', '>');
+  test('detects waiting from ✻ with duration variants', () => {
+    const content = lines('⏺ All done.', '', '✻ Brewed for 2m 1s');
     const state = parseTerminalState(content);
     expect(state.activity).toBe('waiting');
+  });
+
+  test('detects waiting from ✻ with background tasks', () => {
+    const content = lines(
+      '⏺ Changes pushed.',
+      '',
+      '✻ Churned for 1m 29s · 1 background task still running (↓ to manage)',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('waiting');
+  });
+
+  test('detects waiting with realistic terminal output (✻ + ❯ + decorators)', () => {
+    // Real terminal: ⏺ response, ✻ summary, then ❯ prompt with separator lines
+    const content = lines(
+      '⏺ Pushed e2ed576 to develop.',
+      '',
+      '✻ Sautéed for 52s',
+      '',
+      '──────────────────────────────────────',
+      '❯  ',
+      '──────────────────────────────────────',
+      '  ? for shortcuts',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('waiting');
+  });
+
+  test('does NOT show waiting when ⏺ appears after ✻ (new response cycle)', () => {
+    // User submitted, Claude started a new response — ⏺ lines come after ✻
+    const content = lines(
+      '✻ Worked for 30s',
+      '',
+      '❯ fix the bug',
+      '⏺ I found the issue in parser.ts.',
+      '⏺ Read(src/parser.ts)',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('reading');
+  });
+
+  test('does NOT show waiting when Claude is thinking (⏺ after ✻)', () => {
+    // ❯ prompt is always visible, but ⏺ content after ✻ means new response cycle
+    const content = lines(
+      '✻ Brewed for 1m',
+      '',
+      '──────────────────────────────────────',
+      '❯ review the code',
+      '──────────────────────────────────────',
+      '',
+      '⏺ Thinking...',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('thinking');
   });
 
   // --- Thinking detection ---
@@ -218,7 +318,3 @@ describe('parseTerminalState', () => {
   });
 });
 
-/** Helper to join lines for test readability. */
-function lines(...args: string[]): string {
-  return args.join('\n');
-}
