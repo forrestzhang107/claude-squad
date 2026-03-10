@@ -1,6 +1,6 @@
 {
   "name": "@forrestzhang107/claude-squad",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Terminal dashboard for monitoring Claude Code agent sessions",
   "type": "module",
   "bin": {
