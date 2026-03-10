@@ -151,7 +151,7 @@ export function startWatching(
   return () => clearInterval(interval);
 }
 
-function readFullFile(session: AgentSession): void {
+export function readFullFile(session: AgentSession): void {
   try {
     const text = fs.readFileSync(session.jsonlFile, 'utf-8');
     const lines = text.split('\n');
@@ -164,6 +164,10 @@ function readFullFile(session: AgentSession): void {
     const stat = fs.statSync(session.jsonlFile);
     const age = Date.now() - stat.mtimeMs;
     applyInactiveTransition(session, age);
+
+    // processLine sets lastActivityAt = Date.now(), but during initial file read
+    // events are historical — use file mtime for the actual last activity time.
+    session.lastActivityAt = stat.mtimeMs;
 
     session.fileOffset = stat.size;
   } catch {

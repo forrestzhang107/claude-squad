@@ -1,9 +1,14 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {describe, it, expect} from 'vitest';
 import {
   createSession,
   applyInactiveTransition,
+  readFullFile,
 } from '../src/watcher.js';
 import {makeSession, makeDiscovered} from './helpers.js';
+import {systemTurnDuration, assistantText} from './helpers.js';
 
 // ── applyInactiveTransition ──
 
@@ -99,5 +104,34 @@ describe('createSession', () => {
     const ts = 1700000000000;
     const session = createSession(makeDiscovered({modifiedAt: ts}));
     expect(session.lastActivityAt).toBe(ts);
+  });
+});
+
+// ── readFullFile ──
+
+describe('readFullFile', () => {
+  it('sets lastActivityAt to file mtime, not Date.now()', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-test-'));
+    const jsonlFile = path.join(tmpDir, 'test.jsonl');
+
+    // Write a JSONL file with a turn_duration record (triggers resetToolState)
+    fs.writeFileSync(jsonlFile, [
+      assistantText('hello'),
+      systemTurnDuration(),
+    ].join('\n') + '\n');
+
+    // Backdate the file by 15 minutes
+    const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000);
+    fs.utimesSync(jsonlFile, fifteenMinAgo, fifteenMinAgo);
+
+    const session = createSession(makeDiscovered({jsonlFile}));
+    readFullFile(session);
+
+    // lastActivityAt should reflect file mtime (~15 min ago), not Date.now()
+    const age = Date.now() - session.lastActivityAt;
+    expect(age).toBeGreaterThan(14 * 60 * 1000);
+    expect(session.activity).toBe('waiting');
+
+    fs.rmSync(tmpDir, {recursive: true});
   });
 });
