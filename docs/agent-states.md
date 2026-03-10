@@ -24,7 +24,7 @@ States are detected by reading terminal history via AppleScript (`history of tab
 4. **Thinking** — Last `⏺` line matches `Thinking...`
 5. **Tool active** — Last `⏺` line matches `ToolName(args)` pattern
 6. **Collapsed summary** — Last `⏺` line matches `Searched for N patterns` or `Read N files`
-7. **Responding** — Last `⏺` line is plain text
+7. **Responding** — Last `⏺` line is plain text (unless `❯` prompt follows → waiting)
 8. **Content stale fallback** — If "responding" but terminal content unchanged for 2+ polls → waiting
 9. **No content** — No `⏺` found → waiting
 
@@ -37,9 +37,10 @@ Direct observation: if the terminal screen shows `Allow <ToolName>(<args>)?`, th
 Two mechanisms detect waiting state:
 
 1. **`✻` completion summary** (primary, instant): Claude Code emits `✻ <verb> for <duration>` (e.g. `✻ Brewed for 2m 1s`) when a response cycle finishes. If this appears after the last `⏺` line, the session is waiting.
-2. **Content change detection** (fallback, ~4s delay): If detected as "responding" but terminal content hasn't changed for 2 consecutive polls, the session transitions to waiting. This catches short responses where `✻` doesn't appear.
+2. **`❯` prompt after text** (instant): If the last `⏺` text line is followed by a `❯` prompt (with only terminal chrome in between), Claude has finished. This catches cases where `✻` was missed (e.g. interrupted responses).
+3. **Content change detection** (fallback, ~4s delay): If detected as "responding" but terminal content hasn't changed for 2 consecutive polls, the session transitions to waiting. This catches short responses where `✻` doesn't appear.
 
-Note: Claude Code's `❯` prompt is always visible at the bottom of the terminal (wrapped in `────` separator lines) even while actively working, so it cannot be used to detect waiting state.
+Note: The `❯` prompt alone cannot indicate waiting state (it is always visible, even while Claude is working). It is only used as a waiting signal when it appears *after* a `⏺` text response line with no active content in between.
 
 ## Inactivity Detection
 

@@ -43,11 +43,11 @@ Terminal.app history is read via AppleScript (`history of tab`, last 3000 chars)
 | 4 | `thinking` | Last `⏺` line matches `Thinking...` |
 | 5 | tool-specific | Last `⏺` line matches `ToolName(args)` — includes `Update`, `Explore` |
 | 6 | tool-specific | Collapsed summary: `⏺ Searched for N patterns` or `⏺ Read N files` |
-| 7 | `active` | Last `⏺` line is plain text (responding) |
+| 7 | `active`/`waiting` | Last `⏺` line is plain text — `active` if still generating, `waiting` if `❯` prompt follows |
 | 8 | `waiting` | Content unchanged for 2+ polls (stale fallback) |
 | 9 | `waiting` | No `⏺` content found (fresh session) |
 
-Note: The `❯` prompt is always visible at the bottom of Claude Code's terminal and cannot be used for waiting detection.
+Note: The `❯` prompt is always visible at the bottom of Claude Code's terminal. It is only used for waiting detection when it appears *after* a `⏺` text response line with no active content in between.
 
 ## Polling
 
@@ -55,7 +55,7 @@ Single 2-second interval in Dashboard:
 
 1. Discover processes (`ps` + `lsof`)
 2. Batch-read terminal history for all TTYs (one AppleScript call)
-3. Parse each TTY's content into activity + status
+3. Parse each TTY's content into activity + status + conversation context (last prompt, last response)
 4. Content fingerprinting: if "responding" but content unchanged for 2+ polls → waiting
 5. Diff against previous state to update `lastActivityAt`
 6. Git branch refreshed every ~60s (not every poll)

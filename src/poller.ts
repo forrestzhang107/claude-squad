@@ -274,7 +274,19 @@ export function parseTerminalState(content: string): TerminalState {
   }
 
   // 8. Responding — last ⏺ line is text
+  //    But if there's a ❯ prompt after it (with only chrome in between),
+  //    Claude has finished and the ✻ marker was missed or absent (e.g. interrupted).
   if (lastBulletIsText) {
+    let hasPromptAfter = false;
+    for (let i = lastBulletIdx + 1; i < allLines.length; i++) {
+      const after = allLines[i].trim();
+      if (!after || isChrome(after)) continue;
+      hasPromptAfter = after.startsWith('❯');
+      break;
+    }
+    if (hasPromptAfter) {
+      return {activity: 'waiting', statusText: 'Waiting for input', ...conversation};
+    }
     return {activity: 'active', statusText: 'Responding...', ...conversation};
   }
 
@@ -283,16 +295,35 @@ export function parseTerminalState(content: string): TerminalState {
 }
 
 const RESPONSE_LINES = 3;
-const PROMPT_RE = /^❯\s*(.+)/;
+const PROMPT_RE = /^❯\s+(.+)/;
+const PROMPT_MENU_RE = /^❯\s+\d+\./;
+const CHROME_RE = /^[─━\-=]{3,}/;
+
+/** Lines that are terminal UI decoration, not content. */
+function isChrome(trimmed: string): boolean {
+  return CHROME_RE.test(trimmed) || trimmed.startsWith('⏵');
+}
+
+/** Lines that mark the end of a response block (prompt, completion, spinner). */
+function isResponseBoundary(trimmed: string): boolean {
+  return trimmed.startsWith('❯') || COMPLETION_RE.test(trimmed) || ACTIVE_SPINNER_RE.test(trimmed);
+}
+
+/** Lines that are tool invocations (not plain-text response). */
+function isToolBullet(trimmed: string): boolean {
+  return TOOL_LINE_RE.test(trimmed) || THINKING_RE.test(trimmed) ||
+    COLLAPSED_SEARCH_RE.test(trimmed) || COLLAPSED_READ_RE.test(trimmed);
+}
 
 /** Extract the user's latest prompt and agent's latest text response from terminal content. */
 function parseConversation(lines: string[]): { lastPrompt: string; lastResponse: string[] } {
   let lastPrompt = '';
-  let lastResponse: string[] = [];
 
-  // Find the last ❯ prompt with text
+  // Find the last ❯ prompt with text (skip numbered menu items like "❯ 1. Yes")
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].trim().match(PROMPT_RE);
+    const trimmed = lines[i].trim();
+    if (PROMPT_MENU_RE.test(trimmed)) continue;
+    const m = trimmed.match(PROMPT_RE);
     if (m) {
       lastPrompt = m[1].trim();
       break;
@@ -305,10 +336,7 @@ function parseConversation(lines: string[]): { lastPrompt: string; lastResponse:
   let startIdx = lines.length - 1;
   for (; startIdx >= 0; startIdx--) {
     const trimmed = lines[startIdx].trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith('❯') || COMPLETION_RE.test(trimmed) ||
-        ACTIVE_SPINNER_RE.test(trimmed) ||
-        /^[─━\-=]{3,}/.test(trimmed) || trimmed.startsWith('⏵')) continue;
+    if (!trimmed || isChrome(trimmed) || isResponseBoundary(trimmed)) continue;
     break;
   }
 
@@ -316,28 +344,24 @@ function parseConversation(lines: string[]): { lastPrompt: string; lastResponse:
   for (let i = startIdx; i >= 0; i--) {
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
-    // Stop at prompts, completion markers, spinners
-    if (trimmed.startsWith('❯') || COMPLETION_RE.test(trimmed) ||
-        ACTIVE_SPINNER_RE.test(trimmed)) break;
-    // Skip terminal UI chrome
-    if (/^[─━\-=]{3,}/.test(trimmed) || trimmed.startsWith('⏵')) continue;
+    if (isResponseBoundary(trimmed)) break;
+    if (isChrome(trimmed)) continue;
     if (trimmed.startsWith('⏺')) {
-      // Tool calls, thinking, collapsed summaries end the response block
-      if (TOOL_LINE_RE.test(trimmed) || THINKING_RE.test(trimmed) ||
-          COLLAPSED_SEARCH_RE.test(trimmed) || COLLAPSED_READ_RE.test(trimmed)) break;
+      if (isToolBullet(trimmed)) break;
       // Plain text response line — include without the ⏺ prefix
       if (trimmed.length > 2) {
         responseLines.push(trimmed.slice(2).trim());
       }
       continue;
     }
+    // Skip tool output lines (⎿ prefix)
+    if (trimmed.startsWith('⎿')) continue;
     // Regular text continuation line
     responseLines.push(trimmed);
   }
   responseLines.reverse();
-  lastResponse = responseLines.slice(-RESPONSE_LINES);
 
-  return { lastPrompt, lastResponse };
+  return { lastPrompt, lastResponse: responseLines.slice(-RESPONSE_LINES) };
 }
 
 function mapToolToState(toolName: string, args: string): { activity: AgentActivity; statusText: string } {

@@ -316,5 +316,123 @@ describe('parseTerminalState', () => {
     expect(state.activity).toBe('active');
     expect(state.statusText).toBe('Responding...');
   });
+
+  // --- Conversation extraction (lastPrompt + lastResponse) ---
+
+  test('extracts last user prompt', () => {
+    const content = lines(
+      '❯ fix the bug in auth.ts',
+      '⏺ Read(src/auth.ts)',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastPrompt).toBe('fix the bug in auth.ts');
+  });
+
+  test('extracts last prompt when multiple prompts exist', () => {
+    const content = lines(
+      '❯ first prompt',
+      '⏺ Done.',
+      '✻ Worked for 10s',
+      '❯ second prompt',
+      '⏺ Read(file.ts)',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastPrompt).toBe('second prompt');
+  });
+
+  test('does not match ❯ numbered menu items as prompt', () => {
+    const content = lines(
+      '❯ real user prompt',
+      '⏺ Bash(git status)',
+      '  ⎿  Running…',
+      ' Do you want to proceed?',
+      ' ❯ 1. Yes',
+      '   2. No',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastPrompt).toBe('real user prompt');
+  });
+
+  test('returns empty prompt when none exists', () => {
+    const content = lines('⏺ Read(file.ts)');
+    const state = parseTerminalState(content);
+    expect(state.lastPrompt).toBe('');
+  });
+
+  test('extracts response lines from text after tools', () => {
+    const content = lines(
+      '❯ explain this',
+      '⏺ Read(src/index.ts)',
+      '  ⎿  [file contents]',
+      '⏺ The issue is in the parser.',
+      '  It fails on edge cases.',
+      '  We need to fix the regex.',
+      '✻ Worked for 30s',
+      '❯ ',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual([
+      'The issue is in the parser.',
+      'It fails on edge cases.',
+      'We need to fix the regex.',
+    ]);
+  });
+
+  test('limits response to 3 lines', () => {
+    const content = lines(
+      '⏺ Line one.',
+      '  Line two.',
+      '  Line three.',
+      '  Line four.',
+      '  Line five.',
+      '✻ Worked for 10s',
+      '❯ ',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toHaveLength(3);
+    expect(state.lastResponse[2]).toBe('Line five.');
+  });
+
+  test('returns empty response when only tool calls exist', () => {
+    const content = lines(
+      '❯ do something',
+      '⏺ Read(file.ts)',
+      '  ⎿  contents',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual([]);
+  });
+
+  test('skips terminal chrome in response collection', () => {
+    const content = lines(
+      '⏺ All done.',
+      '✻ Worked for 5s',
+      '──────────────────────────────────────',
+      '❯ ',
+      '──────────────────────────────────────',
+      '⏵⏵ accept edits',
+    );
+    const state = parseTerminalState(content);
+    expect(state.lastResponse).toEqual(['All done.']);
+  });
+
+  test('empty content returns empty prompt and response', () => {
+    const state = parseTerminalState('');
+    expect(state.lastPrompt).toBe('');
+    expect(state.lastResponse).toEqual([]);
+  });
+
+  // --- ❯ prompt after text → waiting detection ---
+
+  test('detects waiting when ❯ prompt follows text response', () => {
+    const content = lines(
+      '⏺ Pushed to origin/main.',
+      '──────────────────────────────────────',
+      '❯ ',
+      '──────────────────────────────────────',
+    );
+    const state = parseTerminalState(content);
+    expect(state.activity).toBe('waiting');
+  });
 });
 
