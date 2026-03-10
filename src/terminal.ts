@@ -1,21 +1,10 @@
 import {execSync} from 'node:child_process';
 
 /**
- * Switch Terminal.app to the tab running the given PID.
- * Resolves PID -> TTY, then uses AppleScript to activate that tab.
+ * Switch Terminal.app to the tab with the given TTY.
  */
-export function switchToTerminalTab(pid: number): void {
+export function switchToTerminalTab(tty: string): void {
   try {
-    const ttyRaw = execSync(`ps -o tty= -p ${pid}`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-
-    if (!ttyRaw) return;
-
-    // ps returns e.g. "ttys003", we need "/dev/ttys003"
-    const tty = ttyRaw.startsWith('/dev/') ? ttyRaw : `/dev/${ttyRaw}`;
-
     if (!/^\/dev\/ttys?\d+$/.test(tty)) return;
 
     const script = `
@@ -36,6 +25,6 @@ end tell`;
       stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch {
-    // Process may have exited or terminal tab not found
+    // Terminal tab not found
   }
 }
