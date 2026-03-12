@@ -1,10 +1,216 @@
-import {exec} from 'node:child_process';
-import {promisify} from 'node:util';
+import {exec, spawn, type ChildProcess} from 'node:child_process';
+import {writeFileSync, symlinkSync, unlinkSync, mkdirSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import * as path from 'node:path';
+import {promisify} from 'node:util';
 
 import type {AgentActivity, AgentSession} from './types.js';
 
 const execAsync = promisify(exec);
+
+/**
+ * How many characters from the end of terminal history to read.
+ * Needs to be large enough to capture the last ⏺ tool call even after
+ * verbose output (commit diffs, test results, long separator lines).
+ */
+const HISTORY_TAIL_CHARS = 10000;
+
+/**
+ * Persistent JXA (JavaScript for Automation) bridge process.
+ * Spawned once to avoid flashing "osascript" in the Terminal.app tab name
+ * on every poll cycle. Communicates via stdin/stdout JSON lines.
+ */
+
+const BRIDGE_SCRIPT = `
+ObjC.import('Foundation');
+
+var TAIL = ${HISTORY_TAIL_CHARS};
+var stdin = $.NSFileHandle.fileHandleWithStandardInput;
+var stdout = $.NSFileHandle.fileHandleWithStandardOutput;
+var buf = $.NSMutableData.data;
+var EOL = 0x0a;
+
+function writeOut(str) {
+  var d = $.NSString.alloc.initWithUTF8String(str + "\\n")
+    .dataUsingEncoding($.NSUTF8StringEncoding);
+  stdout.writeData(d);
+}
+
+while (true) {
+  var chunk = stdin.availableData;
+  if (chunk.length === 0) break;
+  buf.appendData(chunk);
+
+  while (true) {
+    var len = buf.length;
+    if (len === 0) break;
+    var raw = buf.mutableBytes;
+    if (!raw) break;
+    var nlPos = -1;
+    for (var i = 0; i < len; i++) { if (raw[i] === EOL) { nlPos = i; break; } }
+    if (nlPos < 0) break;
+
+    var lineData = buf.subdataWithRange($.NSMakeRange(0, nlPos));
+    if (nlPos + 1 < len) {
+      var rest = buf.subdataWithRange($.NSMakeRange(nlPos + 1, len - nlPos - 1));
+      buf.setData(rest);
+    } else {
+      buf.setLength(0);
+    }
+
+    var line = $.NSString.alloc.initWithDataEncoding(lineData, $.NSUTF8StringEncoding).js;
+    if (!line) continue;
+
+    try {
+      var ttyList = JSON.parse(line);
+      var Terminal = Application('Terminal');
+      var result = {};
+      var windows = Terminal.windows();
+      for (var wi = 0; wi < windows.length; wi++) {
+        var tabs = windows[wi].tabs();
+        for (var ti = 0; ti < tabs.length; ti++) {
+          var tty = tabs[ti].tty();
+          if (ttyList.indexOf(tty) >= 0) {
+            var h = tabs[ti].history();
+            if (h.length > TAIL) h = h.substring(h.length - TAIL);
+            result[tty] = h;
+          }
+        }
+      }
+      writeOut(JSON.stringify(result));
+    } catch(e) {
+      writeOut(JSON.stringify({"__error": String(e)}));
+    }
+  }
+}
+`;
+
+let bridgeScriptPath: string | null = null;
+let osascriptSymlink: string | null = null;
+
+function getBridgeScriptPath(): string {
+  if (!bridgeScriptPath) {
+    bridgeScriptPath = path.join(tmpdir(), `csq-bridge-${process.pid}.js`);
+    writeFileSync(bridgeScriptPath, BRIDGE_SCRIPT);
+  }
+  return bridgeScriptPath;
+}
+
+/**
+ * Get a symlink to osascript named "node" so Terminal.app shows "node"
+ * (matching the parent process) instead of "osascript" in the tab title.
+ */
+function getOsascriptPath(): string {
+  if (!osascriptSymlink) {
+    const dir = path.join(tmpdir(), `csq-${process.pid}`);
+    mkdirSync(dir, {recursive: true});
+    const link = path.join(dir, 'node');
+    try {
+      try { unlinkSync(link); } catch {}
+      symlinkSync('/usr/bin/osascript', link);
+      osascriptSymlink = link;
+    } catch {
+      osascriptSymlink = 'osascript';
+    }
+  }
+  return osascriptSymlink;
+}
+
+interface PendingRequest {
+  resolve: (v: Record<string, string>) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface JXABridge {
+  proc: ChildProcess;
+  buffer: string;
+  pending: PendingRequest[];
+}
+
+let bridge: JXABridge | null = null;
+
+function ensureBridge(): JXABridge {
+  if (bridge && bridge.proc.exitCode === null && !bridge.proc.killed) {
+    return bridge;
+  }
+  const scriptPath = getBridgeScriptPath();
+  const proc = spawn(getOsascriptPath(), ['-l', 'JavaScript', scriptPath], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const b: JXABridge = { proc, buffer: '', pending: [] };
+
+  proc.stdout!.on('data', (d: Buffer) => {
+    b.buffer += d.toString();
+    let nlIdx: number;
+    while ((nlIdx = b.buffer.indexOf('\n')) >= 0) {
+      const line = b.buffer.slice(0, nlIdx);
+      b.buffer = b.buffer.slice(nlIdx + 1);
+      const req = b.pending.shift();
+      if (req) {
+        clearTimeout(req.timer);
+        try {
+          req.resolve(JSON.parse(line));
+        } catch {
+          req.resolve({});
+        }
+      }
+    }
+  });
+  proc.on('exit', () => {
+    for (const req of b.pending) {
+      clearTimeout(req.timer);
+      req.resolve({});
+    }
+    b.pending.length = 0;
+    bridge = null;
+  });
+  proc.stderr!.resume(); // drain
+  bridge = b;
+  return b;
+}
+
+function queryBridge(ttys: string[]): Promise<Record<string, string>> {
+  return new Promise((resolve) => {
+    const b = ensureBridge();
+    const timer = setTimeout(() => {
+      const idx = b.pending.findIndex((p) => p.resolve === resolve);
+      if (idx >= 0) b.pending.splice(idx, 1);
+      resolve({});
+    }, 10000);
+    b.pending.push({resolve, timer});
+    try {
+      b.proc.stdin!.write(JSON.stringify(ttys) + '\n');
+    } catch {
+      // Bridge died between ensureBridge() and write (EPIPE)
+      const idx = b.pending.findIndex((p) => p.resolve === resolve);
+      if (idx >= 0) b.pending.splice(idx, 1);
+      clearTimeout(timer);
+      resolve({});
+    }
+  });
+}
+
+/** Kill the persistent JXA bridge and clean up temp files. */
+process.on('exit', () => shutdownJXABridge());
+
+export function shutdownJXABridge(): void {
+  if (bridge) {
+    bridge.proc.kill();
+    bridge = null;
+  }
+  if (osascriptSymlink && osascriptSymlink !== 'osascript') {
+    try {
+      rmSync(path.dirname(osascriptSymlink), {recursive: true, force: true});
+    } catch {}
+    osascriptSymlink = null;
+  }
+  if (bridgeScriptPath) {
+    try {
+      unlinkSync(bridgeScriptPath);
+    } catch {}
+    bridgeScriptPath = null;
+  }
+}
 
 export interface ClaudeProcess {
   pid: number;
@@ -83,58 +289,23 @@ export async function getGitBranch(cwd: string): Promise<string> {
 }
 
 /**
- * How many characters from the end of terminal history to read.
- * Needs to be large enough to capture the last ⏺ tool call even after
- * verbose output (commit diffs, test results, long separator lines).
- */
-const HISTORY_TAIL_CHARS = 10000;
-
-/**
  * Batch-read recent terminal output for given TTYs from Terminal.app.
- * Uses `history of tab` and takes only the last HISTORY_TAIL_CHARS characters
- * to keep data transfer small and focus on current state.
+ * Uses a persistent JXA bridge process to avoid flashing "osascript" in
+ * the Terminal.app tab name on every poll.
  */
 export async function readTerminalContents(ttys: string[]): Promise<Map<string, string>> {
   const contents = new Map<string, string>();
   if (ttys.length === 0) return contents;
 
   try {
-    const SEPARATOR = '___TTY_SEP___';
-    const ttySet = ttys.map((t) => `"${t}"`).join(', ');
-    const script = `
-      tell application "Terminal"
-        set ttyList to {${ttySet}}
-        set output to ""
-        repeat with w in windows
-          repeat with t in tabs of w
-            set ttyName to tty of t
-            if ttyList contains ttyName then
-              set h to history of t
-              set hLen to length of h
-              if hLen > ${HISTORY_TAIL_CHARS} then
-                set h to text (hLen - ${HISTORY_TAIL_CHARS - 1}) thru hLen of h
-              end if
-              set output to output & ttyName & "${SEPARATOR}" & h & "${SEPARATOR}${SEPARATOR}"
-            end if
-          end repeat
-        end repeat
-        return output
-      end tell
-    `;
-    const {stdout: raw} = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
-      timeout: 10000,
-      maxBuffer: 10 * 1024 * 1024, // 10MB — history can be large even when trimmed
-    });
-
-    for (const chunk of raw.split(`${SEPARATOR}${SEPARATOR}`)) {
-      const sepIdx = chunk.indexOf(SEPARATOR);
-      if (sepIdx === -1) continue;
-      const tty = chunk.slice(0, sepIdx).trim();
-      const content = chunk.slice(sepIdx + SEPARATOR.length);
-      if (tty) contents.set(tty, content);
+    const result = await queryBridge(ttys);
+    for (const [tty, content] of Object.entries(result)) {
+      if (tty !== '__error' && content) {
+        contents.set(tty, content);
+      }
     }
   } catch {
-    // Terminal.app not running or AppleScript failed
+    // Terminal.app not running or bridge failed
   }
 
   return contents;
