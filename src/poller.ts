@@ -1,6 +1,10 @@
-import {execSync} from 'node:child_process';
+import {exec} from 'node:child_process';
+import {promisify} from 'node:util';
 import * as path from 'node:path';
+
 import type {AgentActivity, AgentSession} from './types.js';
+
+const execAsync = promisify(exec);
 
 export interface ClaudeProcess {
   pid: number;
@@ -15,13 +19,11 @@ export function extractProjectName(cwd: string): string {
 }
 
 /** Find all running claude processes with their start times, TTYs, and CWDs. */
-export function discoverProcesses(): ClaudeProcess[] {
+export async function discoverProcesses(): Promise<ClaudeProcess[]> {
   const processes: ClaudeProcess[] = [];
   try {
-    const lines = execSync("ps -eo pid,lstart,tty,comm | grep -w 'claude$'", {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim().split('\n').filter(Boolean);
+    const {stdout} = await execAsync("ps -eo pid,lstart,tty,comm | grep -w 'claude$'");
+    const lines = stdout.trim().split('\n').filter(Boolean);
 
     const pidToProc = new Map<number, Partial<ClaudeProcess>>();
     const pids: number[] = [];
@@ -44,10 +46,7 @@ export function discoverProcesses(): ClaudeProcess[] {
 
     if (pids.length > 0) {
       try {
-        const lsofOutput = execSync(`lsof -a -d cwd -Fn -p ${pids.join(',')}`, {
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        const {stdout: lsofOutput} = await execAsync(`lsof -a -d cwd -Fn -p ${pids.join(',')}`);
         let currentPid = 0;
         for (const lsofLine of lsofOutput.split('\n')) {
           if (lsofLine.startsWith('p')) {
@@ -74,14 +73,10 @@ export function discoverProcesses(): ClaudeProcess[] {
 }
 
 /** Get git branch for a directory. Returns empty string on failure. */
-export function getGitBranch(cwd: string): string {
+export async function getGitBranch(cwd: string): Promise<string> {
   try {
-    return execSync('git branch --show-current', {
-      cwd,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 2000,
-    }).trim();
+    const {stdout} = await execAsync('git branch --show-current', {cwd, timeout: 2000});
+    return stdout.trim();
   } catch {
     return '';
   }
@@ -99,7 +94,7 @@ const HISTORY_TAIL_CHARS = 10000;
  * Uses `history of tab` and takes only the last HISTORY_TAIL_CHARS characters
  * to keep data transfer small and focus on current state.
  */
-export function readTerminalContents(ttys: string[]): Map<string, string> {
+export async function readTerminalContents(ttys: string[]): Promise<Map<string, string>> {
   const contents = new Map<string, string>();
   if (ttys.length === 0) return contents;
 
@@ -126,9 +121,7 @@ export function readTerminalContents(ttys: string[]): Map<string, string> {
         return output
       end tell
     `;
-    const raw = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
+    const {stdout: raw} = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
       timeout: 10000,
       maxBuffer: 10 * 1024 * 1024, // 10MB — history can be large even when trimmed
     });
@@ -446,9 +439,9 @@ export function resetPollerState(): void {
 
 /** Dependency injection for pollSessions, enabling unit tests. */
 export interface PollDeps {
-  discoverProcesses: () => ClaudeProcess[];
-  readTerminalContents: (ttys: string[]) => Map<string, string>;
-  getGitBranch: (cwd: string) => string;
+  discoverProcesses: () => ClaudeProcess[] | Promise<ClaudeProcess[]>;
+  readTerminalContents: (ttys: string[]) => Map<string, string> | Promise<Map<string, string>>;
+  getGitBranch: (cwd: string) => string | Promise<string>;
   now: () => number;
 }
 
@@ -463,22 +456,33 @@ const defaultDeps: PollDeps = {
  * Main poll function. Discovers running Claude processes, reads their
  * terminal content, and returns current session states.
  */
-export function pollSessions(
+export async function pollSessions(
   previous: Map<number, AgentSession>,
   deps: PollDeps = defaultDeps,
-): AgentSession[] {
-  const processes = deps.discoverProcesses();
+): Promise<AgentSession[]> {
+  const processes = await deps.discoverProcesses();
   if (processes.length === 0) return [];
 
   const ttys = processes.map((p) => p.tty);
-  const contents = deps.readTerminalContents(ttys);
+  const contents = await deps.readTerminalContents(ttys);
   const refreshGit = ++pollerState.gitRefreshCounter >= GIT_REFRESH_INTERVAL;
   if (refreshGit) pollerState.gitRefreshCounter = 0;
+
+  // Git branch: fetch in parallel for processes that need a refresh
+  const gitBranches = await Promise.all(
+    processes.map((proc) => {
+      const prev = previous.get(proc.pid);
+      return (refreshGit || !prev)
+        ? deps.getGitBranch(proc.cwd)
+        : Promise.resolve(prev.gitBranch);
+    }),
+  );
 
   const activePids = new Set<number>();
   const sessions: AgentSession[] = [];
 
-  for (const proc of processes) {
+  for (let pi = 0; pi < processes.length; pi++) {
+    const proc = processes[pi];
     activePids.add(proc.pid);
     const content = contents.get(proc.tty) || '';
     let {activity, statusText, lastPrompt, lastResponse} = parseTerminalState(content);
@@ -506,10 +510,7 @@ export function pollSessions(
     const stateChanged = !prev || prev.activity !== activity || prev.statusText !== statusText;
     const lastActivityAt = stateChanged ? now : prev.lastActivityAt;
 
-    // Git branch: cached, refreshed every ~60s
-    const gitBranch = (refreshGit || !prev)
-      ? deps.getGitBranch(proc.cwd)
-      : prev.gitBranch;
+    const gitBranch = gitBranches[pi];
 
     // Cache prompt and response across polls so they survive when content
     // scrolls out of the terminal history window.  Clear the cached response

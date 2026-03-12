@@ -45,21 +45,30 @@ export function Dashboard() {
 
   useEffect(() => {
     const previous = new Map<number, AgentSession>();
+    let polling = false;
 
-    function poll() {
-      const current = pollSessions(previous);
+    async function poll() {
+      if (polling) return; // skip if previous poll still running
+      polling = true;
+      try {
+        const current = await pollSessions(previous);
 
-      // Update previous map for next poll
-      previous.clear();
-      for (const s of current) {
-        previous.set(s.pid, s);
+        // Update previous map for next poll
+        previous.clear();
+        for (const s of current) {
+          previous.set(s.pid, s);
+        }
+
+        setSessions(current);
+        setInitialPollDone(true);
+      } catch {
+        // Polling errors are non-fatal; retry on next interval
+      } finally {
+        polling = false;
       }
-
-      setSessions(current);
     }
 
     poll();
-    setInitialPollDone(true);
     const interval = setInterval(poll, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
